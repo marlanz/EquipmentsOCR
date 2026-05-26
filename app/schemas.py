@@ -16,6 +16,10 @@ class OCRResponse(BaseModel):
         ...,
         description="Structured OCR execution results"
     )
+    processing_time: float = Field(
+        ...,
+        description="Time taken to process the document in seconds"
+    )
 
 class HealthResponse(BaseModel):
     status: str

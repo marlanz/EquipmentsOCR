@@ -1,3 +1,4 @@
+import time
 from fastapi import APIRouter, File, UploadFile, status
 from app.schemas import OCRResponse, HealthResponse
 from app.helpers import (
@@ -48,6 +49,8 @@ async def parse_text(file: UploadFile = File(...)):
     submits them to Baidu PaddleOCR API, polls for completion, and returns
     structured markdown and key-value extractions.
     """
+    start_time = time.time()
+
     # 1. Read file bytes and compute file size completely in-memory
     file_bytes = await file.read()
     file_size = len(file_bytes)
@@ -64,4 +67,6 @@ async def parse_text(file: UploadFile = File(...)):
     # 5. Retrieve JSONL pages results and parse them into structured structures
     results = await download_and_parse_jsonl(jsonl_url)
 
-    return OCRResponse(results=results)
+    processing_time = round(time.time() - start_time, 3)
+
+    return OCRResponse(results=results, processing_time=processing_time)
