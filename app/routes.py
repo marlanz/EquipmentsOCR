@@ -90,18 +90,18 @@ async def parse_text(file: UploadFile = File(...)):
     results = await download_and_parse_jsonl(jsonl_url)
 
     # 6. Persist key_value to Google Sheets asynchronously without blocking event loop
-    try:
-        if results and len(results) > 0:
-            kv = results[0].key_value
-            if kv:
-                logger.info(f"Extracted OCR key_value payload for Sheets: {kv}")
-                await asyncio.to_thread(append_ocr_result, kv)
-            else:
-                logger.warning("No key_value dict found on first result page. Skipping Sheets append.")
-        else:
-            logger.warning("No results parsed from OCR job. Skipping Sheets append.")
-    except Exception as exc:
-        logger.error(f"Error in Google Sheets persistence task flow: {exc}", exc_info=True)
+    # try:
+    #     if results and len(results) > 0:
+    #         kv = results[0].key_value
+    #         if kv:
+    #             logger.info(f"Extracted OCR key_value payload for Sheets: {kv}")
+    #             await asyncio.to_thread(append_ocr_result, kv)
+    #         else:
+    #             logger.warning("No key_value dict found on first result page. Skipping Sheets append.")
+    #     else:
+    #         logger.warning("No results parsed from OCR job. Skipping Sheets append.")
+    # except Exception as exc:
+    #     logger.error(f"Error in Google Sheets persistence task flow: {exc}", exc_info=True)
 
     processing_time = round(time.time() - start_time, 3)
 
@@ -188,11 +188,11 @@ async def parse_text_gemini(file: UploadFile = File(...)):
     ]
 
     # 6. Persist key_value to Google Sheets asynchronously
-    try:
-        logger.info(f"Extracted OCR key_value payload: {kv}")
-        await asyncio.to_thread(append_ocr_result, kv)
-    except Exception as exc:
-        logger.error(f"Error in Google Sheets persistence task flow: {exc}", exc_info=True)
+    # try:
+    #     logger.info(f"Extracted OCR key_value payload: {kv}")
+    #     await asyncio.to_thread(append_ocr_result, kv)
+    # except Exception as exc:
+    #     logger.error(f"Error in Google Sheets persistence task flow: {exc}", exc_info=True)
 
     processing_time = round(time.time() - start_time, 3)
 
