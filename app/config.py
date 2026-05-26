@@ -20,16 +20,6 @@ POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "5"))
 MAX_WAIT_SECONDS = int(os.getenv("MAX_WAIT_SECONDS", "300"))
 PADDLE_MODEL = os.getenv("MODEL", "PaddleOCR-VL-1.5").strip()
 
-# Google Sheets Persistence Pipeline configuration
-GOOGLE_PROJECT_ID = os.getenv("GOOGLE_PROJECT_ID", "").strip()
-GOOGLE_PRIVATE_KEY_ID = os.getenv("GOOGLE_PRIVATE_KEY_ID", "").strip()
-GOOGLE_PRIVATE_KEY = os.getenv("GOOGLE_PRIVATE_KEY", "").strip()
-if GOOGLE_PRIVATE_KEY:
-    GOOGLE_PRIVATE_KEY = GOOGLE_PRIVATE_KEY.replace("\\n", "\n")
-GOOGLE_CLIENT_EMAIL = os.getenv("GOOGLE_CLIENT_EMAIL", "").strip()
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
-GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "").strip()
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -40,35 +30,27 @@ logger = logging.getLogger("ocr-api")
 def validate_config():
     """Validates required configurations on startup."""
     logger.info("Validating configuration on startup...")
-    errors = []
     
-    if not PADDLE_BASE_URL:
-        errors.append("PADDLE_BASE_URL (or JOB_URL)")
-    if not PADDLE_API_KEY:
-        errors.append("PADDLE_API_KEY (or TOKEN)")
-    if not GEMINI_API_KEY:
-        errors.append("GEMINI_API_KEY")
-        
-    if not GOOGLE_PROJECT_ID:
-        errors.append("GOOGLE_PROJECT_ID")
-    if not GOOGLE_PRIVATE_KEY_ID:
-        errors.append("GOOGLE_PRIVATE_KEY_ID")
-    if not GOOGLE_PRIVATE_KEY:
-        errors.append("GOOGLE_PRIVATE_KEY")
-    if not GOOGLE_CLIENT_EMAIL:
-        errors.append("GOOGLE_CLIENT_EMAIL")
-    if not GOOGLE_CLIENT_ID:
-        errors.append("GOOGLE_CLIENT_ID")
-    if not GOOGLE_SHEET_ID:
-        errors.append("GOOGLE_SHEET_ID")
-
-    if errors:
-        error_msg = f"Configuration validation failed. Missing: {', '.join(errors)}"
+    # At least one OCR engine must have credentials
+    has_paddle = bool(PADDLE_BASE_URL and PADDLE_API_KEY)
+    has_gemini = bool(GEMINI_API_KEY)
+    
+    if not has_paddle and not has_gemini:
+        error_msg = (
+            "Configuration validation failed. "
+            "At least one OCR engine must be configured. "
+            "Please define GEMINI_API_KEY or (PADDLE_BASE_URL and PADDLE_API_KEY)."
+        )
         logger.critical(error_msg)
         raise ValueError(error_msg)
         
     logger.info("Configuration successfully validated.")
-    logger.info(f"Paddle Base URL: {PADDLE_BASE_URL}")
-    logger.info(f"Paddle Model: {PADDLE_MODEL}")
-    logger.info(f"Gemini Model: {GEMINI_MODEL}")
-    logger.info(f"Google Sheet ID: {GOOGLE_SHEET_ID}")
+    if has_paddle:
+        logger.info(f"Paddle OCR Engine: active. Base URL: {PADDLE_BASE_URL}, Model: {PADDLE_MODEL}")
+    else:
+        logger.warning("Paddle OCR Engine: inactive (PADDLE_BASE_URL or PADDLE_API_KEY not configured)")
+        
+    if has_gemini:
+        logger.info(f"Gemini OCR Engine: active. Model: {GEMINI_MODEL}")
+    else:
+        logger.warning("Gemini OCR Engine: inactive (GEMINI_API_KEY not configured)")

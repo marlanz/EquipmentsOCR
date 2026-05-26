@@ -4,7 +4,6 @@ from fastapi import APIRouter, File, UploadFile, HTTPException, status
 from google.genai.errors import APIError
 
 from app.schemas import OCRResponse, OCRResult, HealthResponse
-from app.google_sheet import append_ocr_result
 from app.helpers import (
     validate_upload_paddle,
     submit_ocr_job,
@@ -89,20 +88,6 @@ async def parse_text(file: UploadFile = File(...)):
     # 5. Retrieve JSONL pages results and parse them into structured structures
     results = await download_and_parse_jsonl(jsonl_url)
 
-    # 6. Persist key_value to Google Sheets asynchronously without blocking event loop
-    # try:
-    #     if results and len(results) > 0:
-    #         kv = results[0].key_value
-    #         if kv:
-    #             logger.info(f"Extracted OCR key_value payload for Sheets: {kv}")
-    #             await asyncio.to_thread(append_ocr_result, kv)
-    #         else:
-    #             logger.warning("No key_value dict found on first result page. Skipping Sheets append.")
-    #     else:
-    #         logger.warning("No results parsed from OCR job. Skipping Sheets append.")
-    # except Exception as exc:
-    #     logger.error(f"Error in Google Sheets persistence task flow: {exc}", exc_info=True)
-
     processing_time = round(time.time() - start_time, 3)
 
     return OCRResponse(results=results, processing_time=processing_time)
@@ -186,13 +171,6 @@ async def parse_text_gemini(file: UploadFile = File(...)):
             key_value=kv
         )
     ]
-
-    # 6. Persist key_value to Google Sheets asynchronously
-    # try:
-    #     logger.info(f"Extracted OCR key_value payload: {kv}")
-    #     await asyncio.to_thread(append_ocr_result, kv)
-    # except Exception as exc:
-    #     logger.error(f"Error in Google Sheets persistence task flow: {exc}", exc_info=True)
 
     processing_time = round(time.time() - start_time, 3)
 
