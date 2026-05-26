@@ -1,5 +1,6 @@
 import time
 import asyncio
+from typing import List
 from fastapi import APIRouter, File, UploadFile, HTTPException, status
 from google.genai.errors import APIError
 
@@ -93,18 +94,8 @@ async def parse_text(file: UploadFile = File(...)):
     return OCRResponse(results=results, processing_time=processing_time)
 
 
-@router.post(
-    "/parse-text-gemini",
-    response_model=OCRResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Parse document or image using Gemini OCR"
-)
-async def parse_text_gemini(file: UploadFile = File(...)):
-    """Accepts image uploads (PNG, JPG, JPEG, WEBP, GIF), processes them in memory,
-    performs OCR via Gemini 2.5 Flash-Lite, and returns structured markdown and key-value extractions.
-    """
-    start_time = time.time()
-
+async def process_single_gemini(file: UploadFile) -> OCRResult:
+    """Asynchronous worker to process a single image with PIL validation and Gemini OCR."""
     # 1. Read file bytes in-memory
     try:
         file_bytes = await file.read()
@@ -112,7 +103,7 @@ async def parse_text_gemini(file: UploadFile = File(...)):
         logger.error(f"Read error for '{file.filename}': {read_err}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to read file: {read_err}"
+            detail=f"Failed to read file '{file.filename}': {read_err}"
         )
     file_size = len(file_bytes)
     
@@ -126,33 +117,30 @@ async def parse_text_gemini(file: UploadFile = File(...)):
     try:
         response = await asyncio.to_thread(call_gemini_ocr, image)
     except APIError as api_err:
-        duration_seconds = time.time() - start_time
-        logger.error(f"Gemini APIError (code={api_err.code}): {api_err.message}. Duration: {duration_seconds:.4f}s")
+        logger.error(f"Gemini APIError (code={api_err.code}) for '{file.filename}': {api_err.message}")
         if api_err.code == 429 or api_err.status == "RESOURCE_EXHAUSTED":
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="OCR service temporarily overloaded. Please retry later."
+                detail=f"OCR service temporarily overloaded for '{file.filename}'. Please retry later."
             )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Gemini API Error: {api_err.message}"
+            detail=f"Gemini API Error for '{file.filename}': {api_err.message}"
         )
     except Exception as ocr_err:
-        duration_seconds = time.time() - start_time
-        logger.error(f"Unexpected OCR error for '{file.filename}': {ocr_err}. Duration: {duration_seconds:.4f}s")
+        logger.error(f"Unexpected OCR error for '{file.filename}': {ocr_err}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"OCR processing error: {ocr_err}"
+            detail=f"OCR processing error for '{file.filename}': {ocr_err}"
         )
 
     # 5. Parse and build response
     parsed = response.parsed
     if not parsed:
-        duration_seconds = time.time() - start_time
-        logger.error(f"Failed to parse structured OCR result for '{file.filename}'. Duration: {duration_seconds:.4f}s")
+        logger.error(f"Failed to parse structured OCR result for '{file.filename}'")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to parse structured OCR metadata from image response."
+            detail=f"Failed to parse structured OCR metadata from '{file.filename}' response."
         )
 
     # Construct key-value dict matching response schema requirements
@@ -165,12 +153,33 @@ async def parse_text_gemini(file: UploadFile = File(...)):
         "Vị trí": parsed.vi_tri,
     }
 
-    results = [
-        OCRResult(
-            markdown=parsed.markdown,
-            key_value=kv
+    return OCRResult(
+        markdown=parsed.markdown,
+        key_value=kv
+    )
+
+
+@router.post(
+    "/parse-text-gemini",
+    response_model=OCRResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Parse document or image using Gemini OCR"
+)
+async def parse_text_gemini(files: List[UploadFile] = File(...)):
+    """Accepts multiple image uploads (PNG, JPG, JPEG, WEBP, GIF), processes them in memory
+    concurrently, performs OCR via Gemini 2.5 Flash-Lite, and returns structured markdown and key-value extractions.
+    """
+    start_time = time.time()
+
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No files uploaded for processing."
         )
-    ]
+
+    # Run processing tasks concurrently using asyncio.gather
+    tasks = [process_single_gemini(f) for f in files]
+    results = await asyncio.gather(*tasks)
 
     processing_time = round(time.time() - start_time, 3)
 

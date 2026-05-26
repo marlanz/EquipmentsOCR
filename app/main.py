@@ -75,3 +75,51 @@ async def general_exception_handler(request: Request, exc: Exception):
 
 # Register endpoints router
 app.include_router(router)
+
+
+# --- Custom OpenAPI Schema Post-Processor ---
+# Fixes visual display issues in Swagger UI (/docs) where newer FastAPI
+# versions render List[UploadFile] as strings instead of binary upload buttons.
+from fastapi.openapi.utils import get_openapi
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    
+    # 1. Update components / schemas definitions
+    for component in openapi_schema.get("components", {}).get("schemas", {}).values():
+        for prop in component.get("properties", {}).values():
+            if prop.get("contentMediaType") == "application/octet-stream":
+                prop["format"] = "binary"
+                prop.pop("contentMediaType", None)
+            elif prop.get("type") == "array" and prop.get("items", {}).get("contentMediaType") == "application/octet-stream":
+                prop["items"]["format"] = "binary"
+                prop["items"].pop("contentMediaType", None)
+
+    # 2. Update inline path requestBody schemas
+    for path in openapi_schema.get("paths", {}).values():
+        for operation in path.values():
+            request_body = operation.get("requestBody", {})
+            content = request_body.get("content", {})
+            for media_type in content.values():
+                schema = media_type.get("schema", {})
+                for prop in schema.get("properties", {}).values():
+                    if prop.get("contentMediaType") == "application/octet-stream":
+                        prop["format"] = "binary"
+                        prop.pop("contentMediaType", None)
+                    elif prop.get("type") == "array" and prop.get("items", {}).get("contentMediaType") == "application/octet-stream":
+                        prop["items"]["format"] = "binary"
+                        prop["items"].pop("contentMediaType", None)
+
+    app.openapi_schema = openapi_schema
+    return openapi_schema
+
+app.openapi = custom_openapi
+
