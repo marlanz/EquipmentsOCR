@@ -1,7 +1,7 @@
 import time
 import asyncio
 from typing import List
-from fastapi import APIRouter, File, UploadFile, HTTPException, status
+from fastapi import APIRouter, File, UploadFile, HTTPException, status, BackgroundTasks
 from google.genai.errors import APIError
 
 from app.schemas import OCRResponse, OCRResult, HealthResponse
@@ -15,6 +15,7 @@ from app.helpers import (
     verify_image_bytes,
     call_gemini_ocr,
     check_gemini_connectivity,
+    append_results_to_sheet,
     logger,
 )
 
@@ -85,7 +86,10 @@ async def process_single_paddle(file: UploadFile) -> List[OCRResult]:
     status_code=status.HTTP_200_OK,
     summary="Parse document or image using PaddleOCR"
 )
-async def parse_text(files: List[UploadFile] = File(...)):
+async def parse_text(
+    files: List[UploadFile] = File(...),
+    background_tasks: BackgroundTasks = BackgroundTasks()
+):
     """Accepts document uploads (PNG, JPG, JPEG, PDF), processes them in memory
     concurrently, submits them to Baidu PaddleOCR API, polls for completion, and returns
     structured markdown and key-value extractions for all files.
@@ -106,6 +110,9 @@ async def parse_text(files: List[UploadFile] = File(...)):
     results = []
     for res_list in results_nested:
         results.extend(res_list)
+
+    # Queue Google Sheets update in the background
+    background_tasks.add_task(append_results_to_sheet, results)
 
     processing_time = round(time.time() - start_time, 3)
 
@@ -183,7 +190,10 @@ async def process_single_gemini(file: UploadFile) -> OCRResult:
     status_code=status.HTTP_200_OK,
     summary="Parse document or image using Gemini OCR"
 )
-async def parse_text_gemini(files: List[UploadFile] = File(...)):
+async def parse_text_gemini(
+    files: List[UploadFile] = File(...),
+    background_tasks: BackgroundTasks = BackgroundTasks()
+):
     """Accepts multiple image uploads (PNG, JPG, JPEG, WEBP, GIF), processes them in memory
     concurrently, performs OCR via Gemini 2.5 Flash-Lite, and returns structured markdown and key-value extractions.
     """
@@ -198,6 +208,9 @@ async def parse_text_gemini(files: List[UploadFile] = File(...)):
     # Run processing tasks concurrently using asyncio.gather
     tasks = [process_single_gemini(f) for f in files]
     results = await asyncio.gather(*tasks)
+
+    # Queue Google Sheets update in the background
+    background_tasks.add_task(append_results_to_sheet, results)
 
     processing_time = round(time.time() - start_time, 3)
 

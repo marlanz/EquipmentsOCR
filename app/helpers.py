@@ -1,3 +1,4 @@
+import os
 import re
 import io
 import json
@@ -12,6 +13,8 @@ from PIL import Image, UnidentifiedImageError
 from google import genai
 from google.genai.errors import APIError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
+import gspread
+from google.oauth2 import service_account
 
 from app.config import (
     PADDLE_BASE_URL,
@@ -21,6 +24,10 @@ from app.config import (
     MAX_WAIT_SECONDS,
     GEMINI_API_KEY,
     GEMINI_MODEL,
+    GOOGLE_SHEETS_CREDENTIALS_JSON,
+    GOOGLE_SHEETS_CREDENTIALS_PATH,
+    GOOGLE_SHEETS_NAME,
+    GOOGLE_SHEETS_ENABLED,
     logger,
 )
 from app.schemas import OCRResult
@@ -429,3 +436,109 @@ async def check_gemini_connectivity() -> bool:
     except Exception as exc:
         logger.warning(f"Gemini connection health check failed: {exc}")
         return False
+
+
+# ── Google Sheets Helper Functions ───────────────────────────────────────────
+
+_gspread_client = None
+
+
+def get_gspread_client():
+    """Lazily initializes and returns the authorized gspread client."""
+    global _gspread_client
+    if not GOOGLE_SHEETS_ENABLED:
+        return None
+    if _gspread_client is None:
+        try:
+            logger.info("Initializing Google Sheets client...")
+            scopes = [
+                "https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive"
+            ]
+            
+            if GOOGLE_SHEETS_CREDENTIALS_JSON:
+                logger.info("Loading credentials from GOOGLE_SHEETS_CREDENTIALS_JSON environment variable...")
+                creds_info = json.loads(GOOGLE_SHEETS_CREDENTIALS_JSON)
+                creds = service_account.Credentials.from_service_account_info(
+                    creds_info,
+                    scopes=scopes
+                )
+            elif os.path.exists(GOOGLE_SHEETS_CREDENTIALS_PATH):
+                logger.info(f"Loading credentials from file: {GOOGLE_SHEETS_CREDENTIALS_PATH}...")
+                creds = service_account.Credentials.from_service_account_file(
+                    GOOGLE_SHEETS_CREDENTIALS_PATH,
+                    scopes=scopes
+                )
+            else:
+                raise ValueError("No Google Sheets credentials found (neither env variable nor file).")
+                
+            _gspread_client = gspread.authorize(creds)
+            logger.info("Google Sheets client authorized successfully.")
+        except Exception as exc:
+            logger.error(f"Failed to authorize Google Sheets client: {exc}")
+            return None
+    return _gspread_client
+
+
+def extract_row_data(kv: Dict[str, str]) -> List[str]:
+    """Robustly maps key-value dictionaries to Google Sheets column indices."""
+    if not kv:
+        return ["", "", "", "", ""]
+        
+    def get_val(keys: List[str]) -> str:
+        for k in keys:
+            if k in kv:
+                return kv[k]
+            # Case insensitive check and spacing normalization
+            for ok in kv:
+                if ok.lower().strip() == k.lower().strip():
+                    return kv[ok]
+        return ""
+
+    machine_name = get_val(["machine_name", "TÊN MMTB", "tên mmtb", "tên thiết bị", "machine name"])
+    ma_mmtb = get_val(["Mã MMTB", "ma_mmtb", "mã mmtb", "mã thiết bị", "equipment id", "equipment code"])
+    model = get_val(["Model", "model", "MODEL"])
+    xuong = get_val(["Xưởng", "xuong", "xưởng", "XƯỞNG", "workshop"])
+    vi_tri = get_val(["Vị trí", "vi_tri", "vị trí", "VỊ TRÍ", "location"])
+
+    return [machine_name, ma_mmtb, model, xuong, vi_tri]
+
+
+def append_results_to_sheet_sync(results: List[OCRResult]):
+    """Synchronous implementation to append OCR results to Google Sheets."""
+    client = get_gspread_client()
+    if not client:
+        logger.warning("Google Sheets integration is disabled or not configured. Skipping.")
+        return
+
+    try:
+        logger.info(f"Opening Google Sheet: '{GOOGLE_SHEETS_NAME}'...")
+        spreadsheet = client.open(GOOGLE_SHEETS_NAME)
+        worksheet = spreadsheet.get_worksheet(0)
+        
+        # Check if the worksheet is empty and needs headers
+        if not worksheet.get_all_values():
+            headers = ["TÊN MMTB", "Mã MMTB", "MODEL", "XƯỞNG", "VỊ TRÍ"]
+            logger.info("Sheet is empty. Appending headers...")
+            worksheet.append_row(headers)
+            
+        rows_to_insert = []
+        for result in results:
+            row = extract_row_data(result.key_value)
+            rows_to_insert.append(row)
+            
+        if rows_to_insert:
+            logger.info(f"Appending {len(rows_to_insert)} row(s) to Google Sheet '{GOOGLE_SHEETS_NAME}'...")
+            worksheet.append_rows(rows_to_insert)
+            logger.info("Successfully appended data to Google Sheet.")
+    except Exception as exc:
+        logger.error(f"Error appending data to Google Sheet '{GOOGLE_SHEETS_NAME}': {exc}", exc_info=True)
+
+
+async def append_results_to_sheet(results: List[OCRResult]):
+    """Asynchronously calls the Google Sheets appending task in a worker thread."""
+    if not GOOGLE_SHEETS_ENABLED:
+        logger.debug("Google Sheets integration is disabled. Skipping async dispatch.")
+        return
+    await asyncio.to_thread(append_results_to_sheet_sync, results)
+

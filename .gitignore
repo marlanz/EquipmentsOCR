@@ -17,3 +17,5 @@ ENV/
 # Project caches
 .pytest_cache/
 .mypy_cache/
+
+credentials.json
