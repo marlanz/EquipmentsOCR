@@ -53,19 +53,8 @@ async def health_check():
     )
 
 
-@router.post(
-    "/parse-text",
-    response_model=OCRResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Parse document or image using PaddleOCR"
-)
-async def parse_text(file: UploadFile = File(...)):
-    """Accepts document uploads (PNG, JPG, JPEG, PDF), processes them in memory,
-    submits them to Baidu PaddleOCR API, polls for completion, and returns
-    structured markdown and key-value extractions.
-    """
-    start_time = time.time()
-
+async def process_single_paddle(file: UploadFile) -> List[OCRResult]:
+    """Asynchronous worker to process a single document upload via PaddleOCR API."""
     # 1. Read file bytes and compute file size in-memory
     try:
         file_bytes = await file.read()
@@ -73,7 +62,7 @@ async def parse_text(file: UploadFile = File(...)):
         logger.error(f"Read error for '{file.filename}': {read_err}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to read file: {read_err}"
+            detail=f"Failed to read file '{file.filename}': {read_err}"
         )
     file_size = len(file_bytes)
     
@@ -87,7 +76,36 @@ async def parse_text(file: UploadFile = File(...)):
     jsonl_url = await poll_ocr_job(job_id)
 
     # 5. Retrieve JSONL pages results and parse them into structured structures
-    results = await download_and_parse_jsonl(jsonl_url)
+    return await download_and_parse_jsonl(jsonl_url)
+
+
+@router.post(
+    "/parse-text",
+    response_model=OCRResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Parse document or image using PaddleOCR"
+)
+async def parse_text(files: List[UploadFile] = File(...)):
+    """Accepts document uploads (PNG, JPG, JPEG, PDF), processes them in memory
+    concurrently, submits them to Baidu PaddleOCR API, polls for completion, and returns
+    structured markdown and key-value extractions for all files.
+    """
+    start_time = time.time()
+
+    if not files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No files uploaded for processing."
+        )
+
+    # Process all files concurrently
+    tasks = [process_single_paddle(f) for f in files]
+    results_nested = await asyncio.gather(*tasks)
+
+    # Flatten the results list
+    results = []
+    for res_list in results_nested:
+        results.extend(res_list)
 
     processing_time = round(time.time() - start_time, 3)
 
