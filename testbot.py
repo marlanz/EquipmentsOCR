@@ -19,6 +19,8 @@ from telegram.ext import (
 
 from app.helpers import append_results_to_sheet_sync
 from app.schemas import OCRResult
+import unicodedata
+
 
 # ─────────────────────────────────────────────
 # Logging
@@ -76,15 +78,51 @@ FIELDS = [
 # Helper: get value from kv dict
 # Tries exact key first, then case-insensitive fallback
 # ─────────────────────────────────────────────
-def _get_kv(kv: dict, key: str) -> str:
-    val = kv.get(key, "").strip()
-    if not val:
-        for k, v in kv.items():
-            if k.lower().strip() == key.lower().strip():
-                val = v.strip()
-                break
-    return val or "—"
+# def _get_kv(kv: dict, key: str) -> str:
+#     val = kv.get(key, "").strip()
+#     if not val:
+#         for k, v in kv.items():
+#             if k.lower().strip() == key.lower().strip():
+#                 val = v.strip()
+#                 break
+#     return val or "—"
 
+_KEY_ALIASES: dict[str, list[str]] = {
+    "Model":   ["model", "mo hinh"],
+    "Xưởng":  ["xuong", "xuong san xuat", "nha may"],
+    "Vị trí": ["vi tri", "vi tri ", "vitri"],
+    "Mã MMTB": ["ma mmtb", "ma may", "ma mmtb"],
+}
+
+def _normalize(s: str) -> str:
+    """Strips diacritics and lowercases for fuzzy key matching."""
+    return unicodedata.normalize("NFD", s).encode("ascii", "ignore").decode().lower().strip()
+
+
+def _get_kv(kv: dict, key: str) -> str:
+    # 1. Exact match
+    val = kv.get(key, "").strip()
+    if val:
+        return val
+
+    # 2. Case-insensitive exact match
+    for k, v in kv.items():
+        if k.lower().strip() == key.lower().strip():
+            return v.strip() or "—"
+
+    # 3. Diacritic-normalized match (handles "Vị Tri" vs "Vị trí", "MODEL" vs "Model")
+    norm_key = _normalize(key)
+    for k, v in kv.items():
+        if _normalize(k) == norm_key:
+            return v.strip() or "—"
+
+    # 4. Alias fallback
+    aliases = _KEY_ALIASES.get(key, [])
+    for k, v in kv.items():
+        if _normalize(k) in aliases:
+            return v.strip() or "—"
+
+    return "—"
 
 # ─────────────────────────────────────────────
 # Helper: format OCR result as readable message
@@ -94,11 +132,11 @@ def _format_result(kv: dict, markdown_text: str, engine_name: str, processing_ti
     msg += f"⏱ Thời gian xử lý: `{processing_time}s`\n\n"
     for label, key in FIELDS:
         msg += f"{label}: *{_get_kv(kv, key)}*\n"
-    if markdown_text:
-        snippet = markdown_text[:600]
-        if len(markdown_text) > 600:
-            snippet += "\n... (truncated)"
-        msg += f"\n📝 *Văn bản gốc:*\n```\n{snippet}\n```"
+    # if markdown_text:
+    #     snippet = markdown_text[:600]
+    #     if len(markdown_text) > 600:
+    #         snippet += "\n... (truncated)"
+    #     msg += f"\n📝 *Văn bản gốc:*\n```\n{snippet}\n```"
     return msg
 
 

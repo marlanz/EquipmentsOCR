@@ -482,10 +482,10 @@ def get_gspread_client():
 
 # ── Google Sheets Normalization Maps ─────────────────────────────────────────
 KEY_MAPPING = {
-    "Mã MMTB": ["mã mmtb", "mã máy", "ma mmtb", "ma may"],
+    "Mã MMTB": ["mã mmtb", "mã máy", "ma mmtb", "ma may", "má"],
     "Model": ["model", "mô hình"],
-    "Xưởng": ["xưởng", "xương", "xuong", 'Xương'],
-    "Vị trí": ["vị trí", "trí", "vị tri", "vi tri"]
+    "Xưởng": ["xưởng", "xương", "xuong"],
+    "Vị trí": ["vị trí", "vị tri", "vi tri", "vị tri"],
 }
 
 
