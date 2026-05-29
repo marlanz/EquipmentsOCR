@@ -2,6 +2,8 @@ import os
 import re
 import io
 import json
+import unicodedata
+
 import time
 import asyncio
 import httpx
@@ -489,6 +491,11 @@ KEY_MAPPING = {
 }
 
 
+def _normalize(s: str) -> str:
+    """Strips diacritics and lowercases for fuzzy key matching."""
+    return unicodedata.normalize("NFD", s).encode("ascii", "ignore").decode().lower().strip()
+
+
 def get_standardized_value(key_value_dict: Dict[str, str], standard_key: str) -> str:
     """Finds value from a key-value dictionary using primary key or fuzzy aliases."""
     if not key_value_dict:
@@ -498,11 +505,22 @@ def get_standardized_value(key_value_dict: Dict[str, str], standard_key: str) ->
     if standard_key in key_value_dict:
         return key_value_dict[standard_key]
         
-    # Step 2: Try spelling variation aliases (case and whitespace insensitive)
-    aliases = KEY_MAPPING.get(standard_key, [])
-    for key in key_value_dict.keys():
-        if key.lower().strip() in aliases:
-            return key_value_dict[key]
+    # Step 2: Try case-insensitive exact match
+    for k, v in key_value_dict.items():
+        if k.lower().strip() == standard_key.lower().strip():
+            return v
+            
+    # Step 3: Try diacritic-insensitive normalization match
+    norm_standard = _normalize(standard_key)
+    for k, v in key_value_dict.items():
+        if _normalize(k) == norm_standard:
+            return v
+            
+    # Step 4: Try spelling variation aliases (case, whitespace, and diacritic insensitive)
+    aliases = [_normalize(a) for a in KEY_MAPPING.get(standard_key, [])]
+    for key, val in key_value_dict.items():
+        if _normalize(key) in aliases:
+            return val
             
     return ""
 

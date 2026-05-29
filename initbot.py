@@ -20,6 +20,8 @@ from telegram.ext import (
 from app.helpers import append_results_to_sheet_sync
 from app.schemas import OCRResult
 import unicodedata
+import re
+
 
 
 # ─────────────────────────────────────────────
@@ -91,7 +93,7 @@ FIELDS = [
 _KEY_ALIASES: dict[str, list[str]] = {
     "Model":   ["model", "mo hinh"],
     "Xưởng":  ["xuong", "xuong san xuat", "nha may"],
-    "Vị trí": ["vi tri", "vi tri ", "vitri"],
+    "Vị trí": ["vi tri", "vi tri ", "vitri", "tri"],
     "Mã MMTB": ["ma mmtb", "ma may", "ma mmtb"],
 }
 
@@ -125,6 +127,39 @@ def _get_kv(kv: dict, key: str) -> str:
 
     return "—"
 
+
+# ─────────────────────────────────────────────
+# Persistent Workshop Settings
+# ─────────────────────────────────────────────
+WORKSHOP_FILE = "workshops.json"
+
+def save_user_workshop(user_id: int, workshop: str):
+    data = {}
+    if os.path.exists(WORKSHOP_FILE):
+        try:
+            with open(WORKSHOP_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            logging.error(f"Error reading {WORKSHOP_FILE}: {e}")
+    
+    data[str(user_id)] = workshop
+    try:
+        with open(WORKSHOP_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logging.error(f"Error writing to {WORKSHOP_FILE}: {e}")
+
+def get_user_workshop(user_id: int) -> str:
+    if os.path.exists(WORKSHOP_FILE):
+        try:
+            with open(WORKSHOP_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get(str(user_id), "")
+        except Exception as e:
+            logging.error(f"Error reading {WORKSHOP_FILE}: {e}")
+    return ""
+
+
 # ─────────────────────────────────────────────
 # Helper: format OCR result as readable message
 # ─────────────────────────────────────────────
@@ -139,6 +174,42 @@ def _format_result(kv: dict, markdown_text: str, engine_name: str, processing_ti
     #         snippet += "\n... (truncated)"
     #     msg += f"\n📝 *Văn bản gốc:*\n```\n{snippet}\n```"
     return msg
+
+
+# ─────────────────────────────────────────────
+# /create-workshop command
+# ─────────────────────────────────────────────
+async def create_workshop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    match = re.match(r'^/(?:ws)(?:\s+(.+))?$', text, re.IGNORECASE)
+    
+    workshop_name = match.group(1).strip() if (match and match.group(1)) else ""
+    user_id = update.effective_user.id
+    
+    if workshop_name:
+        save_user_workshop(user_id, workshop_name)
+        await update.message.reply_text(
+            f"🏭 Đã thiết lập xưởng mặc định là: *{workshop_name}*\n"
+            "Giá trị này sẽ được tự động áp dụng và ghi đè lên xưởng khi OCR kết thúc.",
+            parse_mode="Markdown",
+        )
+        return ConversationHandler.END
+    else:
+        current_workshop = get_user_workshop(user_id)
+        if current_workshop:
+            await update.message.reply_text(
+                f"🏭 Xưởng mặc định hiện tại của bạn: *{current_workshop}*\n\n"
+                "Vui lòng nhập tên xưởng mới muốn thiết lập (hoặc gửi /cancel để huỷ):",
+                parse_mode="Markdown",
+            )
+        else:
+            await update.message.reply_text(
+                "🏭 Bạn chưa thiết lập xưởng mặc định.\n\n"
+                "Vui lòng nhập tên xưởng mới muốn thiết lập (hoặc gửi /cancel để huỷ):",
+                parse_mode="Markdown",
+            )
+        context.user_data["waiting_for_workshop"] = True
+        return ConversationHandler.END
 
 
 # ─────────────────────────────────────────────
@@ -170,6 +241,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "*Lệnh:*\n"
         "/start  — Bắt đầu lại\n"
         "/cancel — Huỷ thao tác hiện tại\n"
+        "/ws [tên_xưởng] — Thiết lập xưởng mặc định\n"
         "/help   — Xem hướng dẫn này",
         parse_mode="Markdown",
     )
@@ -264,6 +336,18 @@ async def handle_engine_choice(update: Update, context: ContextTypes.DEFAULT_TYP
         result        = results[0]
         kv            = dict(result.get("key_value", {}))
         markdown_text = result.get("markdown", "")
+
+        # ── Apply Persistent Workshop Overwrite ───────
+        persistent_workshop = get_user_workshop(update.effective_user.id)
+        if persistent_workshop:
+            keys_to_remove = []
+            for k in kv:
+                if k.lower().strip() in ["xưởng", "xuong", "xuong san xuat", "nha may", "xương"]:
+                    keys_to_remove.append(k)
+            for k in keys_to_remove:
+                del kv[k]
+            kv["Xưởng"] = persistent_workshop
+            logging.info(f"Overwrote workshop with persistent value: {persistent_workshop} for user {update.effective_user.id}")
 
         context.user_data["kv"]              = kv
         context.user_data["markdown_text"]   = markdown_text
@@ -650,6 +734,22 @@ async def handle_save_confirmation(update: Update, context: ContextTypes.DEFAULT
 # Fallback: unexpected text outside EDIT_FIELD state
 # ─────────────────────────────────────────────
 async def handle_unexpected_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get("waiting_for_workshop"):
+        workshop_name = update.message.text.strip()
+        if not workshop_name:
+            await update.message.reply_text("⚠️ Tên xưởng không được để trống. Vui lòng nhập lại:")
+            return
+        
+        user_id = update.effective_user.id
+        save_user_workshop(user_id, workshop_name)
+        context.user_data["waiting_for_workshop"] = False
+        await update.message.reply_text(
+            f"🏭 Đã thiết lập xưởng mặc định là: *{workshop_name}*\n"
+            "Giá trị này sẽ được tự động áp dụng và ghi đè lên xưởng khi OCR kết thúc.",
+            parse_mode="Markdown"
+        )
+        return
+
     await update.message.reply_text(
         "⚠️ Hãy gửi ảnh để bắt đầu, hoặc dùng /cancel để huỷ thao tác hiện tại."
     )
@@ -694,6 +794,7 @@ app = ApplicationBuilder().token(BOT_TOKEN).build()
 app.add_handler(CommandHandler("start",  start))
 app.add_handler(CommandHandler("help",   help_cmd))
 app.add_handler(CommandHandler("cancel", cancel))
+app.add_handler(MessageHandler(filters.Regex(r'^/(ws)\b'), create_workshop_cmd))
 app.add_handler(conv_handler)
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unexpected_text))
 
