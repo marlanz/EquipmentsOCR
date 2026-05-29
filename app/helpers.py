@@ -510,7 +510,7 @@ def get_standardized_value(key_value_dict: Dict[str, str], standard_key: str) ->
 def extract_row_data(kv: Dict[str, str]) -> List[str]:
     """Robustly standardizes key-value mappings for Google Sheets columns."""
     if not kv:
-        return ["", "", "", "", ""]
+        return ["", "", "", "", "", ""]
         
     # Extract machine name using robust standard fallbacks
     machine_name = ""
@@ -533,6 +533,7 @@ def extract_row_data(kv: Dict[str, str]) -> List[str]:
     model = get_standardized_value(kv, "Model")
     xuong = get_standardized_value(kv, "Xưởng")
     vi_tri = get_standardized_value(kv, "Vị trí")
+    status_val = kv.get("status", "")
 
     # If Model is empty but is written in the machine name, extract it
     if not model and machine_name and "model" in machine_name.lower():
@@ -542,7 +543,7 @@ def extract_row_data(kv: Dict[str, str]) -> List[str]:
             # Clean up leading punctuation/separators
             model = re.sub(r'^[:：\-=\s]+', '', model).strip()
 
-    return [machine_name, ma_mmtb, model, xuong, vi_tri]
+    return [machine_name, ma_mmtb, model, xuong, vi_tri, status_val]
 
 
 def append_results_to_sheet_sync(
@@ -584,7 +585,7 @@ def append_results_to_sheet_sync(
         # ── Ensure header row exists ───────────────────────────────────────
         existing = worksheet.get_all_values()
         if not existing:
-            headers = ["TÊN MMTB", "Mã MMTB", "MODEL", "XƯỞNG", "VỊ TRÍ"]
+            headers = ["TÊN MMTB", "Mã MMTB", "MODEL", "XƯỞNG", "VỊ TRÍ", "TRẠNG THÁI"]
             logger.info(f"[{source}] Sheet is empty — writing headers.")
             worksheet.append_row(headers)
             existing = [headers]

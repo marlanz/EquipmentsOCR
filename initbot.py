@@ -54,7 +54,7 @@ GEMINI_ENDPOINT = f"{API_BASE_URL}/parse-text-gemini"
 # ─────────────────────────────────────────────
 # Conversation States
 # ─────────────────────────────────────────────
-SELECT_ENGINE, CONFIRM_RESULT, EDIT_FIELD, CONFIRM_SAVE = range(4)
+SELECT_ENGINE, SELECT_STATUS, CONFIRM_RESULT, EDIT_FIELD, CONFIRM_SAVE = range(5)
 
 # Callback data constants
 CB_PADDLE       = "engine:paddle"
@@ -71,6 +71,7 @@ FIELDS = [
     ("📦 Model",        "Model"),
     ("🏭 Xưởng",        "Xưởng"),
     ("📍 Vị trí",       "Vị trí"),
+    ("⚡ Trạng thái",    "status"),
 ]
 
 
@@ -274,11 +275,6 @@ async def handle_engine_choice(update: Update, context: ContextTypes.DEFAULT_TYP
         if len(pretty_json) > 3000:
             pretty_json = pretty_json[:3000] + "\n... (truncated)"
 
-        confirm_kb = [[
-            InlineKeyboardButton("✅ Đúng, lưu lại", callback_data=CB_CONFIRM_YES),
-            InlineKeyboardButton("✏️ Sai, sửa lại",  callback_data=CB_CONFIRM_EDIT),
-        ]]
-
         await context.bot.send_message(
             chat_id=query.message.chat_id,
             text=formatted,
@@ -289,13 +285,19 @@ async def handle_engine_choice(update: Update, context: ContextTypes.DEFAULT_TYP
             text=f"🗂️ *Raw JSON:*\n```json\n{pretty_json}\n```",
             parse_mode="Markdown",
         )
+
+        status_kb = [[
+            InlineKeyboardButton("🟢 Đang hoạt động", callback_data="status:active"),
+            InlineKeyboardButton("🔴 Ngưng hoạt động", callback_data="status:inactive"),
+            InlineKeyboardButton("⚠️ Đã thanh lý", callback_data="status:disposed"),
+        ]]
         await context.bot.send_message(
             chat_id=query.message.chat_id,
-            text="❓ *Thông tin trên có chính xác không?*",
-            reply_markup=InlineKeyboardMarkup(confirm_kb),
+            text="⚡ *Chọn trạng thái thiết bị:*",
+            reply_markup=InlineKeyboardMarkup(status_kb),
             parse_mode="Markdown",
         )
-        return CONFIRM_RESULT
+        return SELECT_STATUS
 
     except requests.exceptions.Timeout:
         await context.bot.send_message(
@@ -311,6 +313,57 @@ async def handle_engine_choice(update: Update, context: ContextTypes.DEFAULT_TYP
             parse_mode="Markdown",
         )
         return ConversationHandler.END
+
+
+# ═════════════════════════════════════════════
+# STEP 2.5 — Status Choice
+# ═════════════════════════════════════════════
+async def handle_status_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    status_data = query.data
+    status_map = {
+        "status:active": "Đang hoạt động",
+        "status:inactive": "Ngưng hoạt động",
+        "status:disposed": "Đã thanh lý",
+    }
+    chosen_status = status_map.get(status_data, "—")
+    
+    if "kv" not in context.user_data:
+        context.user_data["kv"] = {}
+    context.user_data["kv"]["status"] = chosen_status
+
+    confirm_kb = [[
+        InlineKeyboardButton("✅ Đúng, lưu lại", callback_data=CB_CONFIRM_YES),
+        InlineKeyboardButton("✏️ Sai, sửa lại",  callback_data=CB_CONFIRM_EDIT),
+    ]]
+
+    kv = context.user_data["kv"]
+    markdown_text = context.user_data.get("markdown_text", "")
+    engine_name = context.user_data.get("engine_name", "OCR")
+    processing_time = context.user_data.get("processing_time", "?")
+
+    formatted = _format_result(kv, markdown_text, engine_name, processing_time)
+
+    await query.edit_message_text(
+        text=f"✔️ Đã chọn trạng thái: *{chosen_status}*",
+        parse_mode="Markdown",
+    )
+
+    await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text=formatted,
+        parse_mode="Markdown",
+    )
+
+    await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text="❓ *Thông tin trên có chính xác không?*",
+        reply_markup=InlineKeyboardMarkup(confirm_kb),
+        parse_mode="Markdown",
+    )
+    return CONFIRM_RESULT
 
 
 # ═════════════════════════════════════════════
@@ -364,7 +417,7 @@ async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE
     # ── CB_CONFIRM_EDIT: start field-by-field correction ──
     await query.edit_message_text(
         "✏️ *Bắt đầu sửa thông tin...*\n\n"
-        "Gửi `-` nếu muốn *giữ nguyên* giá trị hiện tại.",
+        "Nhập giá trị mới hoặc bấm nút *Giữ nguyên* để giữ giá trị cũ.",
         parse_mode="Markdown",
     )
     context.user_data["field_index"] = 0
@@ -386,15 +439,41 @@ async def _ask_next_field(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     current    = _get_kv(kv, key)
     progress   = f"{idx + 1}/{len(FIELDS)}"
 
-    await context.bot.send_message(
-        chat_id=chat_id,
-        text=(
-            f"📝 *({progress}) {label}*\n\n"
-            f"Hiện tại: `{current}`\n\n"
-            "Nhập giá trị mới, hoặc gửi `-` để giữ nguyên:"
-        ),
-        parse_mode="Markdown",
-    )
+    if key == "status":
+        keyboard = [
+            [
+                InlineKeyboardButton("🟢 Đang hoạt động", callback_data="status:active"),
+                InlineKeyboardButton("🔴 Ngưng hoạt động", callback_data="status:inactive"),
+                InlineKeyboardButton("⚠️ Đã thanh lý", callback_data="status:disposed"),
+            ],
+            [
+                InlineKeyboardButton("↩️ Giữ nguyên", callback_data="status:keep"),
+            ]
+        ]
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"📝 *({progress}) {label}*\n\n"
+                f"Hiện tại: `{current}`\n\n"
+                "Chọn trạng thái mới:"
+            ),
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown",
+        )
+    else:
+        keyboard = [[
+            InlineKeyboardButton("↩️ Giữ nguyên", callback_data="edit:keep"),
+        ]]
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"📝 *({progress}) {label}*\n\n"
+                f"Hiện tại: `{current}`\n\n"
+                "Nhập giá trị mới, hoặc bấm nút để giữ nguyên:"
+            ),
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown",
+        )
     return EDIT_FIELD
 
 
@@ -424,6 +503,60 @@ async def handle_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Advance to next field
     context.user_data["field_index"] = idx + 1
     return await _ask_next_field(context, update.message.chat_id)
+
+
+async def handle_status_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    status_data = query.data
+    status_map = {
+        "status:active": "Đang hoạt động",
+        "status:inactive": "Ngưng hoạt động",
+        "status:disposed": "Đã thanh lý",
+    }
+    
+    idx = context.user_data["field_index"]
+    kv = context.user_data["kv"]
+    label, key = FIELDS[idx]
+
+    if status_data == "status:keep":
+        chosen_status = _get_kv(kv, key)
+        await query.edit_message_text(
+            text=f"↩️ Giữ nguyên *{label}*: `{chosen_status}`",
+            parse_mode="Markdown",
+        )
+    else:
+        chosen_status = status_map.get(status_data, "—")
+        kv[key] = chosen_status
+        context.user_data["kv"] = kv
+        await query.edit_message_text(
+            text=f"✔️ Đã cập nhật *{label}*: `{chosen_status}`",
+            parse_mode="Markdown",
+        )
+
+    # Advance to next field
+    context.user_data["field_index"] = idx + 1
+    return await _ask_next_field(context, query.message.chat_id)
+
+
+async def handle_edit_keep_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    idx = context.user_data["field_index"]
+    kv = context.user_data["kv"]
+    label, key = FIELDS[idx]
+
+    current = _get_kv(kv, key)
+    await query.edit_message_text(
+        text=f"↩️ Giữ nguyên *{label}*: `{current}`",
+        parse_mode="Markdown",
+    )
+
+    # Advance to next field
+    context.user_data["field_index"] = idx + 1
+    return await _ask_next_field(context, query.message.chat_id)
 
 
 # ─────────────────────────────────────────────
@@ -533,11 +666,16 @@ conv_handler = ConversationHandler(
         SELECT_ENGINE: [
             CallbackQueryHandler(handle_engine_choice, pattern="^engine:"),
         ],
+        SELECT_STATUS: [
+            CallbackQueryHandler(handle_status_choice, pattern="^status:"),
+        ],
         CONFIRM_RESULT: [
             CallbackQueryHandler(handle_confirmation, pattern="^confirm:"),
         ],
         EDIT_FIELD: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_field_input),
+            CallbackQueryHandler(handle_status_callback, pattern="^status:"),
+            CallbackQueryHandler(handle_edit_keep_callback, pattern="^edit:keep"),
         ],
         CONFIRM_SAVE: [
             CallbackQueryHandler(handle_save_confirmation, pattern="^save:"),
