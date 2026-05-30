@@ -565,7 +565,7 @@ async def _ask_next_field(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
 # STEP 4 — Receive text input for each field
 # ═════════════════════════════════════════════
 async def handle_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_input = update.message.text.strip()
+    user_input = update.message.text.strip().upper()
     idx        = context.user_data["field_index"]
     kv         = context.user_data["kv"]
     label, key = FIELDS[idx]

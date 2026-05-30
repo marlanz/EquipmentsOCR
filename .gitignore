@@ -19,3 +19,4 @@ ENV/
 .mypy_cache/
 
 credentials.json
+workshops.json
