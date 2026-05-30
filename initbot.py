@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import asyncio
-import requests
+import httpx
 
 from dotenv import load_dotenv
 
@@ -302,12 +302,12 @@ async def handle_engine_choice(update: Update, context: ContextTypes.DEFAULT_TYP
         image_bytes   = bytes(await telegram_file.download_as_bytearray())
         logging.info(f"Downloaded image ({len(image_bytes)} bytes) → {endpoint}")
 
-        # ── POST to FastAPI OCR endpoint ───────────────
-        response = requests.post(
-            endpoint,
-            files=[("files", ("image.jpg", image_bytes, "image/jpeg"))],
-            timeout=120,
-        )
+        # ── POST to FastAPI OCR endpoint (async, non-blocking) ─────────
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                endpoint,
+                files=[("files", ("image.jpg", image_bytes, "image/jpeg"))],
+            )
         logging.info(f"API status: {response.status_code}")
 
         if response.status_code != 200:
@@ -383,7 +383,7 @@ async def handle_engine_choice(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return SELECT_STATUS
 
-    except requests.exceptions.Timeout:
+    except httpx.TimeoutException:
         await context.bot.send_message(
             chat_id=query.message.chat_id,
             text="❌ API timeout. Hãy thử lại sau.",
