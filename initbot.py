@@ -21,6 +21,7 @@ from app.helpers import append_results_to_sheet_sync, lookup_row_by_mmtb_sync, u
 from app.schemas import OCRResult
 import unicodedata
 import re
+import html
 
 
 
@@ -269,13 +270,25 @@ async def set_location_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
+    user_id = update.effective_user.id
+    
+    current_location = html.escape(get_user_location(user_id) or "Chưa thiết lập ❌")
+    current_workshop = html.escape(get_user_workshop(user_id) or "Chưa thiết lập ❌")
+    
     await update.message.reply_text(
-        "👋 *Chào mừng đến với Equipment OCR Bot!*\n\n"
-        "📸 Gửi ảnh nhãn thiết bị để bắt đầu.\n\n"
-        "• 🔵 *Paddle OCR* — hỗ trợ ảnh & PDF\n"
-        "• ✨ *Gemini OCR* — nhanh hơn, chỉ hỗ trợ ảnh\n\n"
-        "/help để xem hướng dẫn.",
-        parse_mode="Markdown",
+        "👋 <b>Chào mừng đến với Equipment OCR Bot!</b>\n\n"
+        "⚙️ <b>Cấu hình mặc định hiện tại của bạn:</b>\n"
+        f"📍 Vị trí mặc định: <b>{current_location}</b>\n"
+        f"🏭 Xưởng mặc định: <b>{current_workshop}</b>\n"
+        "<i>(Sử dụng lệnh <code>/l [vị_trí]</code> và <code>/x [tên_xưởng]</code> để thay đổi)</i>\n\n"
+        "📋 <b>Quy trình thêm thiết bị:</b>\n"
+        "1️⃣ <b>Gửi ảnh</b> hoặc PDF nhãn máy/thiết bị vào chat\n"
+        "2️⃣ <b>Chọn OCR Engine</b> (Paddle hoặc Gemini)\n"
+        "3️⃣ <b>Kiểm tra thông tin</b> trích xuất (đặc biệt là Vị trí & Xưởng)\n"
+        "4️⃣ <b>Xác nhận</b> hoặc <b>Sửa đổi</b> các trường nếu có sai lệch\n"
+        "5️⃣ Dữ liệu sẽ tự động lưu vào Google Sheets\n\n"
+        "📸 Hãy gửi ảnh hoặc PDF nhãn thiết bị để bắt đầu!",
+        parse_mode="HTML",
     )
     return ConversationHandler.END
 
@@ -550,9 +563,10 @@ async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE
             context.user_data["sheets_saved"] = True
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
-                text="✅ *Thông tin đã xác nhận và lưu vào Google Sheets!*\n\n"
+                text="✅ <b>Thông tin đã xác nhận và lưu vào Google Sheets!</b>\n\n"
+                     "💡 <b>Nhắc nhở:</b> Đừng quên kiểm tra và cập nhật vị trí mặc định của bạn bằng lệnh <code>/l [vị_trí]</code> (nếu cần thiết) khi đổi khu vực nhé!\n\n"
                      "Gửi ảnh mới để tiếp tục.",
-                parse_mode="Markdown",
+                parse_mode="HTML",
             )
         except Exception as e:
             logging.exception(e)
@@ -785,9 +799,10 @@ async def handle_save_confirmation(update: Update, context: ContextTypes.DEFAULT
         context.user_data["sheets_saved"] = True
         await context.bot.send_message(
             chat_id=query.message.chat_id,
-            text="✅ *Dữ liệu đã sửa được lưu thành công vào Google Sheets!*\n\n"
+            text="✅ <b>Dữ liệu đã sửa được lưu thành công vào Google Sheets!</b>\n\n"
+                 "💡 <b>Nhắc nhở:</b> Đừng quên kiểm tra và cập nhật vị trí mặc định của bạn bằng lệnh <code>/l [vị_trí]</code> (nếu cần thiết) khi đổi khu vực nhé!\n\n"
                  "Gửi ảnh mới để tiếp tục.",
-            parse_mode="Markdown",
+            parse_mode="HTML",
         )
     except Exception as e:
         logging.exception(e)
@@ -953,10 +968,11 @@ async def handle_find_save_confirmation(update: Update, context: ContextTypes.DE
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=(
-                    f"✅ *Đã cập nhật thành công mã MMTB `{mmtb_code}` vào Google Sheets!*\n\n"
+                    f"✅ <b>Đã cập nhật thành công mã MMTB <code>{html.escape(mmtb_code)}</code> vào Google Sheets!</b>\n\n"
+                    "💡 <b>Nhắc nhở:</b> Đừng quên kiểm tra và cập nhật vị trí mặc định của bạn bằng lệnh <code>/l [vị_trí]</code> (nếu cần thiết) khi đổi khu vực nhé!\n\n"
                     "Gửi ảnh mới hoặc dùng /f để tiếp tục."
                 ),
-                parse_mode="Markdown",
+                parse_mode="HTML",
             )
         else:
             await context.bot.send_message(
