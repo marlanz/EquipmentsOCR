@@ -70,4 +70,3 @@ def validate_config():
         logger.info(f"Google Sheets Integration: active. Sheet Name: {GOOGLE_SHEETS_NAME}, Credentials Source: {source}")
     else:
         logger.warning("Google Sheets Integration: inactive (Neither GOOGLE_SHEETS_CREDENTIALS_JSON env nor local credentials.json file found)")
-

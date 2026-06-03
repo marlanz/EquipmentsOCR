@@ -3,6 +3,7 @@ import json
 import logging
 import asyncio
 import httpx
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -19,6 +20,7 @@ from telegram.ext import (
 
 from app.helpers import append_results_to_sheet_sync, lookup_row_by_mmtb_sync, update_row_in_sheet_sync
 from app.schemas import OCRResult
+from app.config.factory_structure import FACTORY_STRUCTURE
 import unicodedata
 import re
 import html
@@ -58,6 +60,7 @@ GEMINI_ENDPOINT = f"{API_BASE_URL}/parse-text-gemini"
 # Conversation States
 # ─────────────────────────────────────────────
 SELECT_ENGINE, SELECT_STATUS, CONFIRM_RESULT, EDIT_FIELD, CONFIRM_SAVE, FIND_ASK_EDIT = range(6)
+CFG_SELECT_FACTORY, CFG_SELECT_WORKSHOP, CFG_SELECT_LETTER, CFG_SELECT_NUMBER = range(6, 10)
 
 # Callback data constants
 CB_PADDLE          = "engine:paddle"
@@ -159,22 +162,46 @@ def _save_settings(data: dict):
         logging.error(f"Error writing to {WORKSHOP_FILE}: {e}")
 
 # ── Workshop (Xưởng) ──────────────────────────
-def save_user_workshop(user_id: int, workshop: str):
+def save_user_workshop(user_id: int, workshop: str, context: Optional[ContextTypes.DEFAULT_TYPE] = None):
     data = _load_settings()
     data[str(user_id)] = workshop
     _save_settings(data)
+    if context is not None:
+        context.user_data["workshop"] = workshop
 
 def get_user_workshop(user_id: int) -> str:
     return _load_settings().get(str(user_id), "")
 
 # ── Location (Vị trí) ─────────────────────────
-def save_user_location(user_id: int, location: str):
+def save_user_location(user_id: int, location: str, context: Optional[ContextTypes.DEFAULT_TYPE] = None):
     data = _load_settings()
     data[f"loc_{user_id}"] = location
     _save_settings(data)
+    if context is not None:
+        context.user_data["current_position"] = location
 
 def get_user_location(user_id: int) -> str:
     return _load_settings().get(f"loc_{user_id}", "")
+
+# ── Configuration flow settings helper ───────
+def save_user_config(user_id: int, factory: str, workshop: str, position: str, context: ContextTypes.DEFAULT_TYPE):
+    data = _load_settings()
+    data[f"fac_{user_id}"] = factory
+    data[str(user_id)] = workshop
+    data[f"loc_{user_id}"] = position
+    _save_settings(data)
+    
+    context.user_data["factory"] = factory
+    context.user_data["workshop"] = workshop
+    context.user_data["current_position"] = position
+
+def load_user_config(user_id: int, context: ContextTypes.DEFAULT_TYPE):
+    """Loads configured factory, workshop and location into context.user_data if missing."""
+    if "workshop" not in context.user_data or "current_position" not in context.user_data:
+        data = _load_settings()
+        context.user_data["factory"] = data.get(f"fac_{user_id}", "")
+        context.user_data["workshop"] = data.get(str(user_id), "")
+        context.user_data["current_position"] = data.get(f"loc_{user_id}", "")
 
 
 # ─────────────────────────────────────────────
@@ -194,43 +221,16 @@ def _format_result(kv: dict, markdown_text: str, engine_name: str, processing_ti
 
 
 # ─────────────────────────────────────────────
-# /ws command — set persistent Xưởng
+# /ws command redirect
 # ─────────────────────────────────────────────
-async def create_workshop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    match = re.match(r'^/(?:x)(?:\s+(.+))?$', text, re.IGNORECASE)
-    
-    workshop_name = match.group(1).strip() if (match and match.group(1)) else ""
-    user_id = update.effective_user.id
-    
-    if workshop_name:
-        save_user_workshop(user_id, workshop_name)
-        await update.message.reply_text(
-            f"🏭 Đã thiết lập xưởng mặc định là: *{workshop_name}*\n"
-            "Giá trị này sẽ được tự động áp dụng và ghi đè lên xưởng khi OCR kết thúc.",
-            parse_mode="Markdown",
-        )
-        return ConversationHandler.END
-    else:
-        current_workshop = get_user_workshop(user_id)
-        if current_workshop:
-            await update.message.reply_text(
-                f"🏭 Xưởng mặc định hiện tại của bạn: *{current_workshop}*\n\n"
-                "Vui lòng nhập tên xưởng mới muốn thiết lập (hoặc gửi /cancel để huỷ):",
-                parse_mode="Markdown",
-            )
-        else:
-            await update.message.reply_text(
-                "🏭 Bạn chưa thiết lập xưởng mặc định.\n\n"
-                "Vui lòng nhập tên xưởng mới muốn thiết lập (hoặc gửi /cancel để huỷ):",
-                parse_mode="Markdown",
-            )
-        context.user_data["waiting_for_workshop"] = True
-        return ConversationHandler.END
-
+async def ws_redirect_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🏭 Lệnh <code>/ws</code> đã được thay thế. Vui lòng sử dụng lệnh <code>/x</code> để thiết lập cấu hình Xưởng chính, Tổ/Xưởng và Vị trí thông qua màn hình lựa chọn.",
+        parse_mode="HTML"
+    )
 
 # ─────────────────────────────────────────────
-# /col command — set persistent Vị trí
+# /col or /l command — set persistent Vị trí
 # ─────────────────────────────────────────────
 async def set_location_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -240,29 +240,210 @@ async def set_location_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if location_value:
-        save_user_location(user_id, location_value)
+        save_user_location(user_id, location_value, context)
+        safe_val = html.escape(location_value)
         await update.message.reply_text(
-            f"📍 Đã thiết lập vị trí mặc định là: *{location_value}*\n"
+            f"📍 Đã thiết lập vị trí mặc định là: <b>{safe_val}</b>\n"
             "Giá trị này sẽ được tự động áp dụng và ghi đè lên vị trí khi OCR kết thúc.",
-            parse_mode="Markdown",
+            parse_mode="HTML",
         )
         return ConversationHandler.END
     else:
         current_location = get_user_location(user_id)
         if current_location:
+            safe_curr = html.escape(current_location)
             await update.message.reply_text(
-                f"📍 Vị trí mặc định hiện tại của bạn: *{current_location}*\n\n"
+                f"📍 Vị trí mặc định hiện tại của bạn: <b>{safe_curr}</b>\n\n"
                 "Vui lòng nhập vị trí mới muốn thiết lập (hoặc gửi /cancel để huỷ):",
-                parse_mode="Markdown",
+                parse_mode="HTML",
             )
         else:
             await update.message.reply_text(
                 "📍 Bạn chưa thiết lập vị trí mặc định.\n\n"
                 "Vui lòng nhập vị trí mới muốn thiết lập (hoặc gửi /cancel để huỷ):",
-                parse_mode="Markdown",
+                parse_mode="HTML",
             )
         context.user_data["waiting_for_location"] = True
         return ConversationHandler.END
+
+
+# ─────────────────────────────────────────────
+# Structured Selection Flow keyboard builders
+# ─────────────────────────────────────────────
+from telegram import InlineKeyboardMarkup
+
+def get_factory_keyboard() -> InlineKeyboardMarkup:
+    """Generate Inline Keyboard for Factory selection."""
+    buttons = []
+    factories = list(FACTORY_STRUCTURE.keys())
+    row = []
+    for f in factories:
+        row.append(InlineKeyboardButton(f, callback_data=f"cf_f:{f}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    return InlineKeyboardMarkup(buttons)
+
+def get_workshop_keyboard(factory: str) -> InlineKeyboardMarkup:
+    """Generate Inline Keyboard for Workshop selection dynamically based on Factory."""
+    workshops = FACTORY_STRUCTURE.get(factory, [])
+    buttons = []
+    row = []
+    for w in workshops:
+        row.append(InlineKeyboardButton(w, callback_data=f"cf_w:{w}"))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    return InlineKeyboardMarkup(buttons)
+
+def get_letter_keyboard() -> InlineKeyboardMarkup:
+    """Generate Inline Keyboard for Column Letter selection."""
+    buttons = [
+        [InlineKeyboardButton("A", callback_data="cf_l:A"), InlineKeyboardButton("B", callback_data="cf_l:B")],
+        [InlineKeyboardButton("C", callback_data="cf_l:C"), InlineKeyboardButton("D", callback_data="cf_l:D")],
+        [InlineKeyboardButton("E", callback_data="cf_l:E"), InlineKeyboardButton("F", callback_data="cf_l:F")],
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+def get_number_keyboard() -> InlineKeyboardMarkup:
+    """Generate 5x5 Inline Keyboard for Column Number selection + back button."""
+    buttons = []
+    for r in range(5):
+        row = []
+        for c in range(1, 6):
+            num = r * 5 + c
+            row.append(InlineKeyboardButton(str(num), callback_data=f"cf_n:{num}"))
+        buttons.append(row)
+    buttons.append([InlineKeyboardButton("⬅️ Chọn lại chữ cái", callback_data="cf_back")])
+    return InlineKeyboardMarkup(buttons)
+
+
+# ─────────────────────────────────────────────
+# Structured Selection Flow handler callbacks
+# ─────────────────────────────────────────────
+async def start_config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Entry point for /x configuration flow."""
+    context.user_data.pop("temp_factory", None)
+    context.user_data.pop("temp_workshop", None)
+    context.user_data.pop("temp_letter", None)
+
+    await update.message.reply_text(
+        "🏭 <b>Chọn Xưởng chính (Factory):</b>",
+        reply_markup=get_factory_keyboard(),
+        parse_mode="HTML"
+    )
+    return CFG_SELECT_FACTORY
+
+async def handle_cfg_factory_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Stores Factory choice and prompts Workshop choice."""
+    query = update.callback_query
+    await query.answer()
+
+    factory = query.data.split(":", 1)[1]
+    context.user_data["temp_factory"] = factory
+    logging.info(f"[CONFIG FLOW] User {query.from_user.id} selected Factory: {factory}")
+
+    await query.edit_message_text(
+        text=f"🏭 Xưởng chính: <b>{html.escape(factory)}</b>\n\n🏢 <b>Chọn Tổ/Xưởng:</b>",
+        reply_markup=get_workshop_keyboard(factory),
+        parse_mode="HTML"
+    )
+    return CFG_SELECT_WORKSHOP
+
+async def handle_cfg_workshop_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Stores Workshop choice and prompts Column Letter choice."""
+    query = update.callback_query
+    await query.answer()
+
+    workshop = query.data.split(":", 1)[1]
+    context.user_data["temp_workshop"] = workshop
+    logging.info(f"[CONFIG FLOW] User {query.from_user.id} selected Workshop: {workshop}")
+
+    factory = context.user_data["temp_factory"]
+
+    await query.edit_message_text(
+        text=f"🏭 Xưởng chính: <b>{html.escape(factory)}</b>\n🏢 Tổ/Xưởng: <b>{html.escape(workshop)}</b>\n\n🔠 <b>Chọn chữ cái cho Cột:</b>",
+        reply_markup=get_letter_keyboard(),
+        parse_mode="HTML"
+    )
+    return CFG_SELECT_LETTER
+
+async def handle_cfg_letter_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Stores Column Letter choice and prompts Column Number choice."""
+    query = update.callback_query
+    await query.answer()
+
+    letter = query.data.split(":", 1)[1]
+    context.user_data["temp_letter"] = letter
+    logging.info(f"[CONFIG FLOW] User {query.from_user.id} selected Column Letter: {letter}")
+
+    factory = context.user_data["temp_factory"]
+    workshop = context.user_data["temp_workshop"]
+
+    await query.edit_message_text(
+        text=f"🏭 Xưởng chính: <b>{html.escape(factory)}</b>\n🏢 Tổ/Xưởng: <b>{html.escape(workshop)}</b>\n🔠 Chữ cái cột: <b>{html.escape(letter)}</b>\n\n🔢 <b>Chọn số thứ tự cho Cột:</b>",
+        reply_markup=get_number_keyboard(),
+        parse_mode="HTML"
+    )
+    return CFG_SELECT_NUMBER
+
+async def handle_cfg_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles back action from Number selection back to Letter selection."""
+    query = update.callback_query
+    await query.answer()
+
+    factory = context.user_data["temp_factory"]
+    workshop = context.user_data["temp_workshop"]
+    context.user_data.pop("temp_letter", None)
+    logging.info(f"[CONFIG FLOW] User {query.from_user.id} clicked back to Letter selection")
+
+    await query.edit_message_text(
+        text=f"🏭 Xưởng chính: <b>{html.escape(factory)}</b>\n🏢 Tổ/Xưởng: <b>{html.escape(workshop)}</b>\n\n🔠 <b>Chọn chữ cái cho Cột:</b>",
+        reply_markup=get_letter_keyboard(),
+        parse_mode="HTML"
+    )
+    return CFG_SELECT_LETTER
+
+async def handle_cfg_number_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Stores Column Number choice, confirms and saves the configuration."""
+    query = update.callback_query
+    await query.answer()
+
+    number = query.data.split(":", 1)[1]
+    letter = context.user_data["temp_letter"]
+    current_position = f"{letter}{number}"
+    
+    factory = context.user_data.pop("temp_factory")
+    workshop = context.user_data.pop("temp_workshop")
+    context.user_data.pop("temp_letter", None)
+
+    user_id = query.from_user.id
+    save_user_config(user_id, factory, workshop, current_position, context)
+    logging.info(f"[CONFIG FLOW] User {user_id} configured factory={factory}, workshop={workshop}, position={current_position}")
+
+    await query.edit_message_text(
+        text=(
+            "✅ <b>Đã cấu hình thành công!</b>\n\n"
+            f"🏭 <b>Xưởng chính:</b> {html.escape(factory)}\n"
+            f"🏢 <b>Tổ/Xưởng:</b> {html.escape(workshop)}\n"
+            f"📍 <b>Vị trí cột:</b> {html.escape(current_position)}\n\n"
+            "📸 Hãy gửi hình ảnh để xử lý OCR."
+        ),
+        parse_mode="HTML"
+    )
+    return ConversationHandler.END
+
+async def cancel_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancels the /x config flow."""
+    context.user_data.pop("temp_factory", None)
+    context.user_data.pop("temp_workshop", None)
+    context.user_data.pop("temp_letter", None)
+    await update.message.reply_text("🚫 Đã huỷ cấu hình. Thiết lập cũ vẫn được giữ nguyên.")
+    return ConversationHandler.END
 
 
 # ─────────────────────────────────────────────
@@ -271,16 +452,19 @@ async def set_location_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     user_id = update.effective_user.id
+    load_user_config(user_id, context)
     
-    current_location = html.escape(get_user_location(user_id) or "Chưa thiết lập ❌")
-    current_workshop = html.escape(get_user_workshop(user_id) or "Chưa thiết lập ❌")
+    current_factory = html.escape(context.user_data.get("factory") or "Chưa thiết lập ❌")
+    current_workshop = html.escape(context.user_data.get("workshop") or "Chưa thiết lập ❌")
+    current_position = html.escape(context.user_data.get("current_position") or "Chưa thiết lập ❌")
     
     await update.message.reply_text(
         "👋 <b>Chào mừng đến với Equipment OCR Bot!</b>\n\n"
         "⚙️ <b>Cấu hình mặc định hiện tại của bạn:</b>\n"
-        f"📍 Vị trí mặc định: <b>{current_location}</b>\n"
-        f"🏭 Xưởng mặc định: <b>{current_workshop}</b>\n"
-        "<i>(Sử dụng lệnh <code>/l [vị_trí]</code> và <code>/x [tên_xưởng]</code> để thay đổi)</i>\n\n"
+        f"🏭 Xưởng chính: <b>{current_factory}</b>\n"
+        f"🏢 Tổ/Xưởng: <b>{current_workshop}</b>\n"
+        f"📍 Vị trí cột: <b>{current_position}</b>\n"
+        "<i>(Sử dụng lệnh <code>/x</code> để thay đổi xưởng/vị trí hoặc <code>/l [vị_trí]</code> để đổi nhanh vị trí cột)</i>\n\n"
         "📋 <b>Quy trình thêm thiết bị:</b>\n"
         "1️⃣ <b>Gửi ảnh</b> hoặc PDF nhãn máy/thiết bị vào chat\n"
         "2️⃣ <b>Chọn OCR Engine</b> (Paddle hoặc Gemini)\n"
@@ -298,19 +482,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─────────────────────────────────────────────
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📖 *Hướng dẫn sử dụng*\n\n"
+        "📖 <b>Hướng dẫn sử dụng</b>\n\n"
         "1. Gửi ảnh nhãn máy/thiết bị vào chat\n"
         "2. Chọn engine OCR (Paddle hoặc Gemini)\n"
         "3. Kiểm tra kết quả và xác nhận hoặc sửa\n"
         "4. Dữ liệu được lưu vào Google Sheets\n\n"
-        "*Lệnh:*\n"
+        "<b>Lệnh:</b>\n"
         "/start  — Bắt đầu lại\n"
         "/cancel — Huỷ thao tác hiện tại\n"
-        "/x [tên_xưởng] — Thiết lập xưởng mặc định\n"
-        "/l [vị_trí]   — Thiết lập vị trí mặc định\n"
+        "/x      — Màn hình cấu hình Xưởng & Vị trí\n"
+        "/l [vị_trí]   — Thiết lập vị trí cột nhanh\n"
         "/f [mã_mmtb]   — Tìm MMTB có sẵn\n"
         "/help   — Xem hướng dẫn này",
-        parse_mode="Markdown",
+        parse_mode="HTML",
     )
     return ConversationHandler.END
 
@@ -404,29 +588,33 @@ async def handle_engine_choice(update: Update, context: ContextTypes.DEFAULT_TYP
         kv            = dict(result.get("key_value", {}))
         markdown_text = result.get("markdown", "")
 
+        # Load user configuration defaults
+        user_id = update.effective_user.id
+        load_user_config(user_id, context)
+
         # ── Apply Persistent Workshop Overwrite ───────
-        persistent_workshop = get_user_workshop(update.effective_user.id)
-        if persistent_workshop:
+        ws = context.user_data.get("workshop") or get_user_workshop(user_id)
+        if ws:
             keys_to_remove = []
             for k in kv:
                 if k.lower().strip() in ["xưởng", "xuong", "xuong san xuat", "nha may", "xương"]:
                     keys_to_remove.append(k)
             for k in keys_to_remove:
                 del kv[k]
-            kv["Xưởng"] = persistent_workshop
-            logging.info(f"Overwrote workshop with persistent value: {persistent_workshop} for user {update.effective_user.id}")
+            kv["Xưởng"] = ws
+            logging.info(f"Overwrote workshop with value: {ws} for user {user_id}")
 
         # ── Apply Persistent Location Overwrite ────────
-        persistent_location = get_user_location(update.effective_user.id)
-        if persistent_location:
+        pos = context.user_data.get("current_position") or get_user_location(user_id)
+        if pos:
             keys_to_remove = []
             for k in kv:
                 if k.lower().strip() in ["vị trí", "vi tri", "vitri", "vi tri ", "tri"]:
                     keys_to_remove.append(k)
             for k in keys_to_remove:
                 del kv[k]
-            kv["Vị trí"] = persistent_location
-            logging.info(f"Overwrote location with persistent value: {persistent_location} for user {update.effective_user.id}")
+            kv["Vị trí"] = pos
+            logging.info(f"Overwrote location with value: {pos} for user {user_id}")
 
         context.user_data["kv"]              = kv
         context.user_data["markdown_text"]   = markdown_text
@@ -995,22 +1183,6 @@ async def handle_find_save_confirmation(update: Update, context: ContextTypes.DE
 # Fallback: unexpected text outside EDIT_FIELD state
 # ─────────────────────────────────────────────
 async def handle_unexpected_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get("waiting_for_workshop"):
-        workshop_name = update.message.text.strip()
-        if not workshop_name:
-            await update.message.reply_text("⚠️ Tên xưởng không được để trống. Vui lòng nhập lại:")
-            return
-        
-        user_id = update.effective_user.id
-        save_user_workshop(user_id, workshop_name)
-        context.user_data["waiting_for_workshop"] = False
-        await update.message.reply_text(
-            f"🏭 Đã thiết lập xưởng mặc định là: *{workshop_name}*\n"
-            "Giá trị này sẽ được tự động áp dụng và ghi đè lên xưởng khi OCR kết thúc.",
-            parse_mode="Markdown"
-        )
-        return
-
     if context.user_data.get("waiting_for_location"):
         location_value = update.message.text.strip()
         if not location_value:
@@ -1018,12 +1190,13 @@ async def handle_unexpected_text(update: Update, context: ContextTypes.DEFAULT_T
             return
 
         user_id = update.effective_user.id
-        save_user_location(user_id, location_value)
+        save_user_location(user_id, location_value, context)
         context.user_data["waiting_for_location"] = False
+        safe_val = html.escape(location_value)
         await update.message.reply_text(
-            f"📍 Đã thiết lập vị trí mặc định là: *{location_value}*\n"
+            f"📍 Đã thiết lập vị trí mặc định là: <b>{safe_val}</b>\n"
             "Giá trị này sẽ được tự động áp dụng và ghi đè lên vị trí khi OCR kết thúc.",
-            parse_mode="Markdown"
+            parse_mode="HTML"
         )
         return
 
@@ -1032,9 +1205,35 @@ async def handle_unexpected_text(update: Update, context: ContextTypes.DEFAULT_T
     )
 
 
-# ─────────────────────────────────────────────
 # Main
 # ─────────────────────────────────────────────
+config_conv_handler = ConversationHandler(
+    entry_points=[
+        CommandHandler("x", start_config_cmd),
+        MessageHandler(filters.Regex(r'^/(x)\b'), start_config_cmd),
+    ],
+    states={
+        CFG_SELECT_FACTORY: [
+            CallbackQueryHandler(handle_cfg_factory_choice, pattern="^cf_f:"),
+        ],
+        CFG_SELECT_WORKSHOP: [
+            CallbackQueryHandler(handle_cfg_workshop_choice, pattern="^cf_w:"),
+        ],
+        CFG_SELECT_LETTER: [
+            CallbackQueryHandler(handle_cfg_letter_choice, pattern="^cf_l:"),
+        ],
+        CFG_SELECT_NUMBER: [
+            CallbackQueryHandler(handle_cfg_number_choice, pattern="^cf_n:"),
+            CallbackQueryHandler(handle_cfg_back, pattern="^cf_back$"),
+        ],
+    },
+    fallbacks=[
+        CommandHandler("cancel", cancel_config),
+        CommandHandler("start", start),
+    ],
+    allow_reentry=True,
+)
+
 conv_handler = ConversationHandler(
     entry_points=[
         MessageHandler(filters.PHOTO, handle_photo),
@@ -1072,15 +1271,17 @@ conv_handler = ConversationHandler(
     allow_reentry=True,
 )
 
-app = ApplicationBuilder().token(BOT_TOKEN).build()
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-app.add_handler(CommandHandler("start",  start))
-app.add_handler(CommandHandler("help",   help_cmd))
-app.add_handler(CommandHandler("cancel", cancel))
-app.add_handler(MessageHandler(filters.Regex(r'^/(x)\b'), create_workshop_cmd))
-app.add_handler(MessageHandler(filters.Regex(r'^/(l)\b'), set_location_cmd))
-app.add_handler(conv_handler)
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unexpected_text))
+    app.add_handler(CommandHandler("start",  start))
+    app.add_handler(CommandHandler("help",   help_cmd))
+    app.add_handler(CommandHandler("cancel", cancel))
+    app.add_handler(config_conv_handler)
+    app.add_handler(MessageHandler(filters.Regex(r'^/ws\b'), ws_redirect_cmd))
+    app.add_handler(MessageHandler(filters.Regex(r'^/(l)\b'), set_location_cmd))
+    app.add_handler(conv_handler)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unexpected_text))
 
-print(f"🤖 Bot running | Paddle: {PADDLE_ENDPOINT} | Gemini: {GEMINI_ENDPOINT}")
-app.run_polling()
+    logging.info(f"Bot running | Paddle: {PADDLE_ENDPOINT} | Gemini: {GEMINI_ENDPOINT}")
+    app.run_polling()
