@@ -268,6 +268,82 @@ async def set_location_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─────────────────────────────────────────────
+# Location Adjustment Buttons Helpers & Callback
+# ─────────────────────────────────────────────
+def get_adjacent_positions(position: str) -> tuple[Optional[str], str, Optional[str]]:
+    """
+    Given a position string, returns (decrement_pos, keep_pos, increment_pos).
+    If it cannot be incremented/decremented (e.g., does not end in a number),
+    returns (None, keep_pos, None).
+    """
+    if not position:
+        return None, "", None
+    
+    match = re.match(r"^([A-Za-z]+)\s*(\d+)$", position.strip())
+    if not match:
+        return None, position, None
+        
+    prefix = match.group(1).upper()
+    num_str = match.group(2)
+    num = int(num_str)
+    
+    dec_val = num - 1
+    dec_pos = f"{prefix}{dec_val}" if dec_val > 0 else None
+    inc_pos = f"{prefix}{num + 1}"
+    
+    return dec_pos, f"{prefix}{num}", inc_pos
+
+def get_position_adjustment_keyboard(position: str) -> Optional[InlineKeyboardMarkup]:
+    dec_pos, keep_pos, inc_pos = get_adjacent_positions(position)
+    if not keep_pos:
+        return None
+        
+    buttons = []
+    if dec_pos:
+        buttons.append(InlineKeyboardButton(f"⬅️ {dec_pos}", callback_data=f"pos_set:{dec_pos}"))
+    buttons.append(InlineKeyboardButton(f"🆗 Giữ {keep_pos}", callback_data=f"pos_set:{keep_pos}"))
+    if inc_pos:
+        buttons.append(InlineKeyboardButton(f"➡️ {inc_pos}", callback_data=f"pos_set:{inc_pos}"))
+        
+    return InlineKeyboardMarkup([buttons])
+
+async def handle_position_adjustment_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    chosen_pos = query.data.split(":", 1)[1]
+    user_id = query.from_user.id
+    
+    save_user_location(user_id, chosen_pos, context)
+    
+    original_text = query.message.text
+    
+    success_header = "✅ <b>Đã lưu thông tin vào Google Sheets!</b>"
+    if "Thông tin đã xác nhận" in original_text:
+        success_header = "✅ <b>Thông tin đã xác nhận và lưu vào Google Sheets!</b>"
+    elif "Dữ liệu đã sửa" in original_text:
+        success_header = "✅ <b>Dữ liệu đã sửa được lưu thành công vào Google Sheets!</b>"
+    elif "Đã cập nhật thành công mã MMTB" in original_text:
+        match = re.search(r"mã MMTB (\S+)", original_text)
+        if match:
+            success_header = f"✅ <b>Đã cập nhật thành công mã MMTB <code>{html.escape(match.group(1))}</code> vào Google Sheets!</b>"
+        else:
+            success_header = "✅ <b>Đã cập nhật thành công mã MMTB vào Google Sheets!</b>"
+            
+    suffix = "Gửi ảnh mới hoặc dùng /f để tiếp tục." if "/f" in original_text else "Gửi ảnh mới để tiếp tục."
+    
+    safe_val = html.escape(chosen_pos)
+    await query.edit_message_text(
+        text=(
+            f"{success_header}\n\n"
+            f"📍 <b>Đã thiết lập vị trí mặc định mới:</b> <code>{safe_val}</code>\n\n"
+            f"{suffix}"
+        ),
+        parse_mode="HTML"
+    )
+
+
+# ─────────────────────────────────────────────
 # Structured Selection Flow keyboard builders
 # ─────────────────────────────────────────────
 from telegram import InlineKeyboardMarkup
@@ -749,11 +825,17 @@ async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE
                 append_results_to_sheet_sync, [ocr_result], "TELEGRAM_CONFIRM"
             )
             context.user_data["sheets_saved"] = True
+            
+            user_id = query.from_user.id
+            current_pos = context.user_data.get("current_position") or get_user_location(user_id)
+            reply_markup = get_position_adjustment_keyboard(current_pos) if current_pos else None
+
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text="✅ <b>Thông tin đã xác nhận và lưu vào Google Sheets!</b>\n\n"
                      "💡 <b>Nhắc nhở:</b> Đừng quên kiểm tra và cập nhật vị trí mặc định của bạn bằng lệnh <code>/l [vị_trí]</code> (nếu cần thiết) khi đổi khu vực nhé!\n\n"
                      "Gửi ảnh mới để tiếp tục.",
+                reply_markup=reply_markup,
                 parse_mode="HTML",
             )
         except Exception as e:
@@ -985,11 +1067,17 @@ async def handle_save_confirmation(update: Update, context: ContextTypes.DEFAULT
             append_results_to_sheet_sync, [ocr_result], "TELEGRAM_CORRECTED_CONFIRM"
         )
         context.user_data["sheets_saved"] = True
+        
+        user_id = query.from_user.id
+        current_pos = context.user_data.get("current_position") or get_user_location(user_id)
+        reply_markup = get_position_adjustment_keyboard(current_pos) if current_pos else None
+
         await context.bot.send_message(
             chat_id=query.message.chat_id,
             text="✅ <b>Dữ liệu đã sửa được lưu thành công vào Google Sheets!</b>\n\n"
                  "💡 <b>Nhắc nhở:</b> Đừng quên kiểm tra và cập nhật vị trí mặc định của bạn bằng lệnh <code>/l [vị_trí]</code> (nếu cần thiết) khi đổi khu vực nhé!\n\n"
                  "Gửi ảnh mới để tiếp tục.",
+            reply_markup=reply_markup,
             parse_mode="HTML",
         )
     except Exception as e:
@@ -1153,6 +1241,11 @@ async def handle_find_save_confirmation(update: Update, context: ContextTypes.DE
 
         if success:
             context.user_data["sheets_saved"] = True
+            
+            user_id = query.from_user.id
+            current_pos = context.user_data.get("current_position") or get_user_location(user_id)
+            reply_markup = get_position_adjustment_keyboard(current_pos) if current_pos else None
+
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=(
@@ -1160,6 +1253,7 @@ async def handle_find_save_confirmation(update: Update, context: ContextTypes.DE
                     "💡 <b>Nhắc nhở:</b> Đừng quên kiểm tra và cập nhật vị trí mặc định của bạn bằng lệnh <code>/l [vị_trí]</code> (nếu cần thiết) khi đổi khu vực nhé!\n\n"
                     "Gửi ảnh mới hoặc dùng /f để tiếp tục."
                 ),
+                reply_markup=reply_markup,
                 parse_mode="HTML",
             )
         else:
@@ -1281,6 +1375,7 @@ if __name__ == "__main__":
     app.add_handler(MessageHandler(filters.Regex(r'^/ws\b'), ws_redirect_cmd))
     app.add_handler(MessageHandler(filters.Regex(r'^/(l)\b'), set_location_cmd))
     app.add_handler(conv_handler)
+    app.add_handler(CallbackQueryHandler(handle_position_adjustment_callback, pattern="^pos_set:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unexpected_text))
 
     logging.info(f"Bot running | Paddle: {PADDLE_ENDPOINT} | Gemini: {GEMINI_ENDPOINT}")
