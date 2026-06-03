@@ -61,6 +61,8 @@ _ALIAS_MAP: Dict[str, str] = {
     # ── Vị trí ────────────────────────────────────────────────────────────────
     "vi tri":        "Vị trí",
     "vitri":         "Vị trí",
+    "v tri":         "Vị trí",     # normalized from "V: Trí"
+    "vtri":          "Vị trí",
     "tri":           "Vị trí",     # corrupted "Vị trí" (image split)
     "i tri":         "Vị trí",     # corruption "(i trí"
     "(i tri":        "Vị trí",     # full "(i trí" OCR artifact
@@ -85,6 +87,67 @@ _RE_HTML_BLOCK = re.compile(
 )
 _RE_STRIP_BOLD = re.compile(r"^\*+\s*|\s*\*+$")
 _RE_ALT_SEP = re.compile(r"^[:.：\-\.\s]+")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Branding-detection constants (used by Stage 5 machine_name extractor)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Company branding / logo text that must never be the machine_name.
+# Values are diacritic-stripped, lowercase.
+_BRANDING_BLOCKLIST: frozenset = frozenset({
+    "daidung",
+    "dai dung",
+    "dai oung",
+    "dai dung",   # ĐẠI DŨNG normalized
+    "viet hung",
+    "viet nam",
+})
+
+# If a line contains ANY of these (normalized), it is equipment text, not branding.
+_EQUIPMENT_KW_NORM: Tuple[str, ...] = (
+    "may",          # MÁY / Máy  (machine in Vietnamese)
+    "machine", "equipment", "thiet bi",
+    "han",          # hàn  (welding)
+    "tien",         # tiện (lathe)
+    "phay",         # phay (milling)
+    "khoan",        # khoan(drilling)
+    "mai",          # mài  (grinding)
+    "cat",          # cắt  (cutting)
+    "gouging", "welding", "cutting", "drilling",
+    "milling", "grinding", "laser", "cnc", "robot",
+    "bom",          # bơm  (pump)
+    "nen",          # nén  (compress)
+    "uon",          # uốn  (bending)
+    "ghep",         # ghép (joining)
+    "ep",           # ép   (pressing)
+    "cuon",         # cuốn (winding)
+    "keo",          # kéo  (drawing)
+)
+
+# Normalized strings that signal the START of the metadata section.
+# Walking backwards from the first line that contains one of these gives
+# the equipment name candidates.
+_ANCHOR_PATTERNS_NORM: Tuple[str, ...] = (
+    "ma mmtb",
+    "mammtb",
+    "code mmtb",
+    "ma may",
+    "mamay",
+    "ma mtb",
+)
+
+# Helpers for machine_name extraction
+_RE_HEADING_PREFIX = re.compile(r"^#+\s*")
+_RE_LEADING_BULLET = re.compile(r"^[-\*•\s]+")
+_RE_VIET_LOWER     = re.compile(
+    r"[\xe0\xe1\xe2\xe3\xe8\xe9\xea\xec\xed\xf2\xf3\xf4\xf5\xf9\xfa\xfd"
+    r"\u0103\u0111\u01a1\u01b0"
+    r"\u1ea1\u1ea3\u1ea5\u1ea7\u1ea9\u1eab\u1ead\u1eaf\u1eb1\u1eb3\u1eb5\u1eb7"
+    r"\u1eb9\u1ebb\u1ebd\u1ebf\u1ec1\u1ec3\u1ec5\u1ec7\u1ec9\u1ecb"
+    r"\u1ecd\u1ecf\u1ed1\u1ed3\u1ed5\u1ed7\u1ed9\u1edb\u1edd\u1edf\u1ee1\u1ee3"
+    r"\u1ee5\u1ee7\u1ee9\u1eeb\u1eed\u1eef\u1ef1\u1ef3\u1ef7\u1ef9]"
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -317,6 +380,16 @@ def _parse_kv_from_text(text: str) -> Optional[Tuple[str, str]]:
     if not text:
         return None
 
+    # Check if there is a second colon and combined they form a known key (e.g. "V: Trí : B16")
+    parts = [p.strip() for p in re.split(r"[:：]", text)]
+    if len(parts) >= 3:
+        combined = f"{parts[0]} {parts[1]}"
+        combined_clean = _RE_STRIP_BOLD.sub("", combined).strip()
+        if normalize_key(combined_clean):
+            val = ":".join(parts[2:]).strip()
+            val = _RE_STRIP_BOLD.sub("", val).strip()
+            return (combined_clean, val)
+
     # Standard: "key : value" or "**key** : value"
     m = _RE_KV_STANDARD.match(text)
     if m:
@@ -522,22 +595,20 @@ def _enhanced_markdown_kv(
             continue
 
         # ── Standard KV ───────────────────────────────────────────────────────
-        sm = _RE_KV_STANDARD.match(line)
-        if sm:
-            k = _RE_STRIP_BOLD.sub("", sm.group(1).strip()).strip()
-            v = _RE_STRIP_BOLD.sub("", sm.group(2).strip()).strip()
-            if k:
-                canonical = normalize_key(k) or k
-                if v:
-                    kv[canonical] = v
-                    if debug:
-                        dbg.append(f"  ✔ standard: {k!r} → [{canonical}] = {v!r}")
-                    pending_key = None
-                else:
-                    # Key-only; value may come on next line
-                    pending_key = canonical
-                    if debug:
-                        dbg.append(f"  ⏳ pending key: {canonical!r}")
+        parsed = _parse_kv_from_text(line)
+        if parsed:
+            k, v = parsed
+            canonical = normalize_key(k) or k
+            if v:
+                kv[canonical] = v
+                if debug:
+                    dbg.append(f"  ✔ standard: {k!r} → [{canonical}] = {v!r}")
+                pending_key = None
+            else:
+                # Key-only; value may come on next line
+                pending_key = canonical
+                if debug:
+                    dbg.append(f"  ⏳ pending key: {canonical!r}")
             continue
 
         # ── Known field with alt separator ────────────────────────────────────
@@ -678,6 +749,222 @@ def _recover_missing_fields(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Stage 5 — Anchor-walk machine_name extractor
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _is_branding_line(text: str) -> bool:
+    """
+    Returns True if the text is company branding/section header that should
+    never be treated as the equipment machine_name.
+
+    Detection strategy (in order):
+    1. Empty / markdown-heading-only lines
+    2. Lines ending with ':'  → section headers (e.g. "## HÀN:")
+    3. Direct blocklist match (after normalization)
+    4. Heuristic: ALL CAPS + short + no equipment keywords
+    """
+    if not text:
+        return True
+
+    # Strip markdown heading markers for analysis
+    clean = _RE_HEADING_PREFIX.sub("", text).strip()
+    if not clean:
+        return True     # e.g. "##" with nothing after
+
+    # Section headers end with a colon
+    if clean.rstrip().endswith(":") or clean.rstrip().endswith("\uff1a"):
+        return True
+
+    norm = _normalize(clean)
+
+    # Direct blocklist match
+    if norm in _BRANDING_BLOCKLIST:
+        return True
+
+    # Fuzzy blocklist: normalized text starts with a known brand prefix
+    for brand in _BRANDING_BLOCKLIST:
+        if len(brand) >= 5 and norm.startswith(brand):
+            return True
+
+    # Heuristic: ALL-CAPS + short + no equipment keywords.
+    # ALL-CAPS check: no ASCII lowercase letters AND no lowercase Vietnamese chars.
+    has_ascii_lower = bool(re.search(r"[a-z]", clean))
+    has_viet_lower  = bool(_RE_VIET_LOWER.search(clean))
+    is_all_caps     = not has_ascii_lower and not has_viet_lower
+    is_short        = len(re.sub(r"\s+", "", clean)) <= 20
+    has_equip_kw    = any(kw in norm for kw in _EQUIPMENT_KW_NORM)
+
+    if is_all_caps and is_short and not has_equip_kw:
+        return True
+
+    return False
+
+
+def _is_metadata_kv_line(text: str) -> bool:
+    """
+    Returns True if the line is a metadata KV pair for a known field
+    (e.g. "- Model: MZ-1000", "-Mä MMTB/Code MMTB: B22300035").
+    Used to skip metadata lines while walking backwards for machine_name.
+    """
+    if not text:
+        return False
+    # Strip leading bullet/dash chars
+    clean = _RE_LEADING_BULLET.sub("", text).strip()
+    parsed = _parse_kv_from_text(clean)
+    if parsed:
+        key, _ = parsed
+        key_norm = _normalize(key.split("/")[0])
+        # Check against alias map
+        if normalize_key(key_norm):
+            return True
+    return False
+
+
+def _machine_name_score(text: str) -> int:
+    """
+    Scores a candidate machine_name line.
+    Higher score = more likely to be the true equipment name.
+    """
+    norm  = _normalize(text)
+    score = 0
+    for kw in _EQUIPMENT_KW_NORM:
+        if kw in norm:
+            score += 3
+    # Prefer lines that are not purely supplementary/parenthetical
+    if not text.startswith("("):
+        score += 1
+    # Prefer longer names (more descriptive)
+    if len(text) > 10:
+        score += 1
+    return score
+
+
+def _extract_machine_name_from_lines(text_lines: List[str]) -> Optional[str]:
+    """
+    Core anchor-walk algorithm.
+
+    Steps
+    ─────
+    1. Find the first line containing a metadata anchor (Mã MMTB / Mã máy…).
+    2. Walk backwards from that anchor position.
+    3. Skip: HTML blocks, empty lines, pure-numeric lines, metadata KV pairs.
+    4. STOP when a branding line is encountered.
+    5. Score all collected candidates by equipment-keyword presence.
+    6. Return the highest-scored candidate, or the closest one to the anchor
+       if no candidate has equipment keywords.
+    """
+    if not text_lines:
+        return None
+
+    # 1. Find anchor
+    anchor_idx: Optional[int] = None
+    for i, line in enumerate(text_lines):
+        stripped = _RE_LEADING_BULLET.sub("", line).strip()
+        norm_stripped = _normalize(stripped.split("/")[0])  # handle "Mã MMTB/Code MMTB"
+        norm_full     = _normalize(line)
+        for pat in _ANCHOR_PATTERNS_NORM:
+            if norm_stripped.startswith(pat) or pat in norm_full:
+                anchor_idx = i
+                break
+        if anchor_idx is not None:
+            break
+
+    if anchor_idx is None:
+        return None     # no anchor; caller uses existing machine_name
+
+    # 2. Walk backwards collecting candidates
+    candidates: List[str] = []
+
+    for i in range(anchor_idx - 1, -1, -1):
+        raw_line = text_lines[i].strip()
+
+        # Skip empty lines
+        if not raw_line:
+            continue
+
+        # Skip HTML div/img blocks
+        if raw_line.startswith("<") or _RE_HTML_BLOCK.search(raw_line):
+            continue
+
+        # Strip heading markers for analysis
+        clean = _RE_HEADING_PREFIX.sub("", raw_line).strip()
+        if not clean:
+            continue
+
+        # 3. STOP on branding / section header
+        if _is_branding_line(clean):
+            break
+
+        # Skip pure-numeric lines (e.g. equipment IDs like "19")
+        if re.match(r"^\d[\d\s,\.]*$", clean):
+            continue
+
+        # Skip lines that are metadata KV pairs for known fields
+        if _is_metadata_kv_line(raw_line):
+            continue
+
+        # Valid candidate
+        candidates.append(clean)
+
+    if not candidates:
+        return None
+
+    # 5. Score and pick best candidate
+    scored = [(c, _machine_name_score(c)) for c in candidates]
+    best_score = max(s for _, s in scored)
+
+    if best_score > 0:
+        # Among candidates with the highest score, take the first one
+        # (closest to anchor = most specific equipment description)
+        best = next(c for c, s in scored if s == best_score)
+    else:
+        # No equipment keywords in any candidate; fall back to closest to anchor
+        best = candidates[0]
+
+    return best
+
+
+def extract_machine_name_from_paddle_blocks(
+    blocks: List[_Block],
+    markdown_text: str = "",
+) -> Optional[str]:
+    """
+    Public API for extracting machine_name using the anchor-walk strategy.
+
+    Tries two sources in order:
+    1. Block texts (sorted by Y position, top-to-bottom reading order)
+    2. Markdown text lines (fallback when no raw blocks available)
+
+    This is a PaddleOCR-specific function.  The Gemini pipeline is not affected.
+
+    Parameters
+    ──────────
+    blocks        : List of _Block objects (may be empty).
+    markdown_text : Raw Paddle markdown string.
+
+    Returns
+    ───────
+    The extracted machine_name string, or None if no anchor is found.
+    """
+    # Try blocks first (sorted by Y, most reliable)
+    if blocks:
+        sorted_blks = sorted(blocks, key=lambda b: (b.cy, b.cx))
+        block_lines = [b.text for b in sorted_blks]
+        result = _extract_machine_name_from_lines(block_lines)
+        if result:
+            return result
+
+    # Fallback: markdown lines (HTML blocks already handled inside the algorithm)
+    if markdown_text:
+        clean_md = _RE_HTML_BLOCK.sub("", markdown_text)
+        md_lines = [ln.strip() for ln in clean_md.split("\n")]
+        md_lines = [ln for ln in md_lines if ln]
+        return _extract_machine_name_from_lines(md_lines)
+
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -746,6 +1033,17 @@ def transform_paddleocr_result(
         dbg_all["stage"]["4_after_recovery"] = dict(kv)
         dbg_all["stage"]["4_log"] = dbg4
         logger.debug("[PaddleTransformer] Stage 4 (recovery): %s", dbg4)
+
+    # ── Stage 5: anchor-walk machine_name extraction ─────────────────────────
+    # Overrides whatever machine_name Stage 2 produced (which is the
+    # naive first-line heuristic).  This properly handles company branding
+    # like DAIDUNG / DAI DUNG appearing before the real equipment name.
+    better_name = extract_machine_name_from_paddle_blocks(blocks, markdown_text)
+    if better_name:
+        kv["machine_name"] = better_name
+        if debug:
+            dbg_all["stage"]["5_machine_name"] = better_name
+            logger.debug("[PaddleTransformer] Stage 5 machine_name: %s", better_name)
 
     if debug:
         missing_final = [f for f in TRACKED_FIELDS if f not in kv or not kv[f]]

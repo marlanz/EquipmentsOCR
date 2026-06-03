@@ -18,6 +18,11 @@ from app.paddle_transformer import (
     _enhanced_markdown_kv,
     _recover_missing_fields,
     transform_paddleocr_result,
+    extract_machine_name_from_paddle_blocks,
+    _is_branding_line,
+    _is_metadata_kv_line,
+    _machine_name_score,
+    _extract_machine_name_from_lines,
     _Block,
     ParsedResult,
     SRC_RAW_BLOCKS,
@@ -550,3 +555,163 @@ class TestTransformPaddleocrResult:
         result = transform_paddleocr_result(res)
         # Should be recovered from markdown in Stage 4
         assert result.key_value.get("Vị trí") == "V9"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Group 7 — Branding Detection & Machine Name Anchor Walk (and failed cases)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestBrandingAndMachineName:
+
+    @pytest.mark.parametrize("line, expected", [
+        # Branding / log text should be True
+        ("DAIDUNG", True),
+        ("DAI DUNG", True),
+        ("DAI OUNG", True),
+        ("## DAI DUNG", True),
+        ("VIET HUNG", True),
+        ("VIET NAM", True),
+        ("## HÀN:", True),
+        ("", True),
+        # Normal machine names should be False
+        ("MÁY HÀN ĐIỆN TỬ/ELECTRICAL WELDING MACHINE", False),
+        ("Máy ghép dảm hợp 3000x4000", False),
+        ("MÁY GOUGING JÁSIC", False),
+        ("MÁY HÀN GOUGING MZ-1000 -GOUGING WELDING MACHINE MZ-1000", False),
+        ("Máy hàn Ehave, CM500 DC", False),
+        ("(MMA/MAG/CO2) - Megmeet", False),
+    ])
+    def test_is_branding_line(self, line, expected):
+        assert _is_branding_line(line) == expected
+
+    @pytest.mark.parametrize("line, expected", [
+        ("- Mã MMTB/Code MMTB: B22400711", True),
+        ("- Model: ZHS(L)-1000", True),
+        ("Mã máy : B21600137", True),
+        ("Model:", True),
+        ("Vị trí : AH2", True),
+        ("Mã MMTB: B22300090", True),
+        ("Model: MZ1000", True),
+        ("Xuất xứ : Trung Quốc", False),
+        ("V: Trí : B16 (AH2)", True),  # normalized key starts with 'vi tri'
+        ("Vị trí : TỔ HÀN LINE 1 (A20-21)", True),
+        ("Xương : AH2", True),
+    ])
+    def test_is_metadata_kv_line(self, line, expected):
+        assert _is_metadata_kv_line(line) == expected
+
+    def test_machine_name_score(self):
+        assert _machine_name_score("MÁY HÀN") > _machine_name_score("HÀN")
+        assert _machine_name_score("Máy hàn Ehave, CM500 DC") > _machine_name_score("(MMA/MAG/CO2) - Megmeet")
+
+    def test_failed_case_1(self):
+        # Case 1 from raw.json
+        md = (
+            "DAIDUNG\n"
+            "MÁY HÀN ĐIỆN TỬ/ELECTRICAL WELDING MACHINE\n"
+            "- Mã MMTB/Code MMTB: B22400711\n"
+            "- Model: ZHS(L)-1000\n"
+            "- Xuất xứ/ Origin: Trung Quốc/China"
+        )
+        res = make_res(markdown=md)
+        result = transform_paddleocr_result(res)
+        assert result.key_value.get("machine_name") == "MÁY HÀN ĐIỆN TỬ/ELECTRICAL WELDING MACHINE"
+        assert result.key_value.get("Mã MMTB") == "B22400711"
+        assert result.key_value.get("Model") == "ZHS(L)-1000"
+
+    def test_failed_case_2(self):
+        # Case 2 from raw.json
+        md = (
+            "## DAI DUNG\n"
+            "\n"
+            "Máy ghép dảm hợp 3000x4000\n"
+            "\n"
+            "Mã máy : B21600137\n"
+            "\n"
+            "Model:\n"
+            "\n"
+            "Vị trí : AH2"
+        )
+        res = make_res(markdown=md)
+        result = transform_paddleocr_result(res)
+        assert result.key_value.get("machine_name") == "Máy ghép dảm hợp 3000x4000"
+        assert result.key_value.get("Mã MMTB") == "B21600137"
+        assert result.key_value.get("Vị trí") == "AH2"
+
+    def test_failed_case_3(self):
+        # Case 3 from raw.json
+        md = (
+            "## DAI OUNG\n"
+            "\n"
+            "MÁY GOUGING JÁSIC\n"
+            "\n"
+            "Mã MMTB: B22300090\n"
+            "\n"
+            "Model: MZ1000\n"
+            "\n"
+            "Xuất xứ : Trung Quốc\n"
+            "\n"
+            "V: Trí : B16 (AH2)\n"
+            "\n"
+            '<div style="text-align: center;"><img src="imgs/img_in_image_box_783_333_922_460.jpg" alt="Image" width="10%" /></div>\n'
+        )
+        res = make_res(markdown=md)
+        result = transform_paddleocr_result(res)
+        assert result.key_value.get("machine_name") == "MÁY GOUGING JÁSIC"
+        assert result.key_value.get("Mã MMTB") == "B22300090"
+        assert result.key_value.get("Model") == "MZ1000"
+        assert result.key_value.get("Vị trí") == "B16 (AH2)"
+
+    def test_failed_case_4(self):
+        # Case 4 from raw.json
+        md = (
+            '<div style="text-align: center;"><img src="imgs/img_in_image_box_435_275_503_359.jpg" alt="Image" width="5%" /></div>\n'
+            "\n"
+            "\n"
+            "## DAIDUNG\n"
+            "\n"
+            '<div style="text-align: center;"><img src="imgs/img_in_image_box_881_183_1118_426.jpg" alt="Image" width="18%" /></div>\n'
+            "\n"
+            "\n"
+            "MÁY HÀN GOUGING MZ-1000 -GOUGING WELDING MACHINE MZ-1000\n"
+            "\n"
+            "- Model: MZ-1000\n"
+            "\n"
+            "-Mä MMTB/Code MMTB: B22300035\n"
+            "\n"
+            "- Xuất xử/ Origin: Trung Quốc"
+        )
+        res = make_res(markdown=md)
+        result = transform_paddleocr_result(res)
+        assert result.key_value.get("machine_name") == "MÁY HÀN GOUGING MZ-1000 -GOUGING WELDING MACHINE MZ-1000"
+        assert result.key_value.get("Mã MMTB") == "B22300035"
+        assert result.key_value.get("Model") == "MZ-1000"
+
+    def test_failed_case_5(self):
+        # Case 5 from raw.json
+        md = (
+            "## HÀN:\n"
+            "\n"
+            "19\n"
+            "\n"
+            "Máy hàn Ehave, CM500 DC\n"
+            "\n"
+            "(MMA/MAG/CO2) - Megmeet\n"
+            "\n"
+            "\n"
+            "\n"
+            "Mã MMTB :B22400848\n"
+            "\n"
+            "Model : CM-500A\n"
+            "\n"
+            "Xương : AH2\n"
+            "\n"
+            "Vị trí : TỔ HÀN LINE 1 (A20-21)\n"
+        )
+        res = make_res(markdown=md)
+        result = transform_paddleocr_result(res)
+        assert result.key_value.get("machine_name") == "Máy hàn Ehave, CM500 DC"
+        assert result.key_value.get("Mã MMTB") == "B22400848"
+        assert result.key_value.get("Model") == "CM-500A"
+        assert result.key_value.get("Xưởng") == "AH2"
+        assert result.key_value.get("Vị trí") == "TỔ HÀN LINE 1 (A20-21)"
