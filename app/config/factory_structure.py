@@ -1,16 +1,19 @@
 FACTORY_STRUCTURE = {
-    "An Hạ": [
+   "An Hạ": [
         "Xưởng AH1",
         "Xưởng AH2",
         "Xưởng AH3",
-        "Tổ Thiết bị / Bảo trì",
-        "Trạm Điện chính An Hạ",
+        "Xưởng AH4",
+        "Xưởng AH6",
+        "Xưởng AH8",
+        "Xưởng AH9",
     ],
     "Long An": [
         "Xưởng LA1",
         "Xưởng LA2",
-        "Tổ Cơ điện Long An",
-        "Trạm Cân",
+        "Xưởng LA3",
+        "Xưởng LA4",
+        "Xưởng LA5",
     ],
     "Miền Trung": [
         "Phân xưởng 1",
