@@ -1,0 +1,425 @@
+======================================================================
+  PaddleOCR PIPELINE DIAGNOSTIC REPORT
+======================================================================
+
+──────────────────────────────────────────────────────────────────────
+  TC-1  Real sample – output/doc_0.md (MÁY HÀN CO2)
+──────────────────────────────────────────────────────────────────────
+
+[RAW BLOCKS]
+  [0] 'MÁY HÀN CO2 TÂN THÀNH - TTC-500T'
+  [1] 'Mã MMTB : B22401469'
+  [2] 'Model : TTC-500T'
+  [3] 'Xương : AH6'
+  [4] 'Vị'
+  [5] 'trí : RHT1'
+
+[MARKDOWN TEXT]
+  'MÁY HÀN CO2 TÂN THÀNH - TTC-500T'
+  ''
+  'Mã MMTB : B22401469'
+  ''
+  'Model : TTC-500T'
+  ''
+  'Xương : AH6'
+  ''
+  <img block truncated>
+  ''
+  ''
+  'trí : RHT1'
+
+[PARSED KEY-VALUE]
+  'machine_name'            → 'MÁY HÀN CO2 TÂN THÀNH - TTC-500T'
+  'Mã MMTB'                 → 'B22401469'
+  'Model'                   → 'TTC-500T'
+  'Xương'                   → 'AH6'
+  '<div style="text-align'  → 'center;"><img src="imgs/img_in_image_box_0_309_47_355.jpg" alt="Image" width="7%" /></div>'
+  'trí'                     → 'RHT1'
+
+[FIELD TRACKING]
+  ✅ Mã MMTB      raw=Y  md=Y  parsed=Y  value='B22401469'           lost_at=OK
+  ✅ Model        raw=Y  md=Y  parsed=Y  value='TTC-500T'            lost_at=OK
+  ✅ Xưởng        raw=Y  md=Y  parsed=Y  value='AH6'                 lost_at=OK
+  ✅ Vị trí       raw=Y  md=Y  parsed=Y  value='RHT1'                lost_at=OK
+
+──────────────────────────────────────────────────────────────────────
+  TC-2  Value on next line (multi-line KV)
+──────────────────────────────────────────────────────────────────────
+
+[RAW BLOCKS]
+  [0] 'MÁY TIỆN CNC'
+  [1] 'Mã MMTB : A001'
+  [2] 'Model'
+  [3] ': HAAS ST-10'
+  [4] 'Xưởng : CNC'
+  [5] 'Vị trí'
+  [6] ': C12'
+
+[MARKDOWN TEXT]
+  'MÁY TIỆN CNC'
+  ''
+  'Mã MMTB : A001'
+  ''
+  'Model'
+  ''
+  ': HAAS ST-10'
+  ''
+  'Xưởng : CNC'
+  ''
+  'Vị trí'
+  ''
+  ': C12'
+
+[PARSED KEY-VALUE]
+  'machine_name'            → 'MÁY TIỆN CNC'
+  'Mã MMTB'                 → 'A001'
+  'Xưởng'                   → 'CNC'
+
+[FIELD TRACKING]
+  ✅ Mã MMTB      raw=Y  md=Y  parsed=Y  value='A001'                lost_at=OK
+  ❌ Model        raw=Y  md=Y  parsed=N  value=''                    lost_at=Markdown→KV
+  ✅ Xưởng        raw=Y  md=Y  parsed=Y  value='CNC'                 lost_at=OK
+  ❌ Vị trí       raw=Y  md=Y  parsed=N  value=''                    lost_at=Markdown→KV
+
+  ⚠ FAILURES: Model, Vị trí
+    → Model: lost at [Markdown→KV]
+    → Vị trí: lost at [Markdown→KV]
+
+──────────────────────────────────────────────────────────────────────
+  TC-3  Table layout (Paddle renders | separators)
+──────────────────────────────────────────────────────────────────────
+
+[RAW BLOCKS]
+  [0] 'MÁY PHAY CNC'
+  [1] '| Mã MMTB | C003 |'
+  [2] '| Model | VMC-850 |'
+  [3] '| Xưởng | Phay |'
+  [4] '| Vị trí | D5 |'
+
+[MARKDOWN TEXT]
+  'MÁY PHAY CNC'
+  ''
+  '| Mã MMTB | C003 |'
+  '| Model | VMC-850 |'
+  '| Xưởng | Phay |'
+  '| Vị trí | D5 |'
+
+[PARSED KEY-VALUE]
+  'machine_name'            → 'MÁY PHAY CNC'
+
+[FIELD TRACKING]
+  ❌ Mã MMTB      raw=Y  md=Y  parsed=N  value=''                    lost_at=Markdown→KV
+  ❌ Model        raw=Y  md=Y  parsed=N  value=''                    lost_at=Markdown→KV
+  ❌ Xưởng        raw=Y  md=Y  parsed=N  value=''                    lost_at=Markdown→KV
+  ❌ Vị trí       raw=Y  md=Y  parsed=N  value=''                    lost_at=Markdown→KV
+
+  ⚠ FAILURES: Mã MMTB, Model, Xưởng, Vị trí
+    → Mã MMTB: lost at [Markdown→KV]
+    → Model: lost at [Markdown→KV]
+    → Xưởng: lost at [Markdown→KV]
+    → Vị trí: lost at [Markdown→KV]
+
+──────────────────────────────────────────────────────────────────────
+  TC-4  Inline image between key and value
+──────────────────────────────────────────────────────────────────────
+
+[RAW BLOCKS]
+  [0] 'MÁY HÀN MIG'
+  [1] 'Mã MMTB : D005'
+  [2] '[logo image]'
+  [3] 'Model : MIG-350'
+  [4] 'Xưởng : HÀN'
+  [5] 'Vị trí : E2'
+
+[MARKDOWN TEXT]
+  'MÁY HÀN MIG'
+  ''
+  'Mã MMTB : D005'
+  ''
+  <img block truncated>
+  ''
+  'Model : MIG-350'
+  ''
+  'Xưởng : HÀN'
+  ''
+  'Vị trí : E2'
+
+[PARSED KEY-VALUE]
+  'machine_name'            → 'MÁY HÀN MIG'
+  'Mã MMTB'                 → 'D005'
+  '<div style="text-align'  → 'center;"><img src="imgs/logo.jpg" /></div>'
+  'Model'                   → 'MIG-350'
+  'Xưởng'                   → 'HÀN'
+  'Vị trí'                  → 'E2'
+
+[FIELD TRACKING]
+  ✅ Mã MMTB      raw=Y  md=Y  parsed=Y  value='D005'                lost_at=OK
+  ✅ Model        raw=Y  md=Y  parsed=Y  value='MIG-350'             lost_at=OK
+  ✅ Xưởng        raw=Y  md=Y  parsed=Y  value='HÀN'                 lost_at=OK
+  ✅ Vị trí       raw=Y  md=Y  parsed=Y  value='E2'                  lost_at=OK
+
+──────────────────────────────────────────────────────────────────────
+  TC-5  OCR mis-reads colon as period or dash
+──────────────────────────────────────────────────────────────────────
+
+[RAW BLOCKS]
+  [0] 'MÁY MÀI'
+  [1] 'Mã MMTB . E009'
+  [2] 'Model - GR-200'
+  [3] 'Xưởng : MÀI'
+  [4] 'Vị trí : F3'
+
+[MARKDOWN TEXT]
+  'MÁY MÀI'
+  ''
+  'Mã MMTB . E009'
+  ''
+  'Model - GR-200'
+  ''
+  'Xưởng : MÀI'
+  ''
+  'Vị trí : F3'
+
+[PARSED KEY-VALUE]
+  'machine_name'            → 'MÁY MÀI'
+  'Xưởng'                   → 'MÀI'
+  'Vị trí'                  → 'F3'
+
+[FIELD TRACKING]
+  ❌ Mã MMTB      raw=Y  md=Y  parsed=N  value=''                    lost_at=Markdown→KV
+  ❌ Model        raw=Y  md=Y  parsed=N  value=''                    lost_at=Markdown→KV
+  ✅ Xưởng        raw=Y  md=Y  parsed=Y  value='MÀI'                 lost_at=OK
+  ✅ Vị trí       raw=Y  md=Y  parsed=Y  value='F3'                  lost_at=OK
+
+  ⚠ FAILURES: Mã MMTB, Model
+    → Mã MMTB: lost at [Markdown→KV]
+    → Model: lost at [Markdown→KV]
+
+──────────────────────────────────────────────────────────────────────
+  TC-6  Bold markdown wrappers around keys
+──────────────────────────────────────────────────────────────────────
+
+[RAW BLOCKS]
+  [0] 'MÁY KHOAN'
+  [1] '**Mã MMTB** : F010'
+  [2] '**Model** : DR-13'
+  [3] '**Xưởng** : KHOAN'
+  [4] '**Vị trí** : G7'
+
+[MARKDOWN TEXT]
+  'MÁY KHOAN'
+  ''
+  '**Mã MMTB** : F010'
+  ''
+  '**Model** : DR-13'
+  ''
+  '**Xưởng** : KHOAN'
+  ''
+  '**Vị trí** : G7'
+
+[PARSED KEY-VALUE]
+  'machine_name'            → 'MÁY KHOAN'
+  'Mã MMTB'                 → 'F010'
+  'Model'                   → 'DR-13'
+  'Xưởng'                   → 'KHOAN'
+  'Vị trí'                  → 'G7'
+
+[FIELD TRACKING]
+  ✅ Mã MMTB      raw=Y  md=Y  parsed=Y  value='F010'                lost_at=OK
+  ✅ Model        raw=Y  md=Y  parsed=Y  value='DR-13'               lost_at=OK
+  ✅ Xưởng        raw=Y  md=Y  parsed=Y  value='KHOAN'               lost_at=OK
+  ✅ Vị trí       raw=Y  md=Y  parsed=Y  value='G7'                  lost_at=OK
+
+──────────────────────────────────────────────────────────────────────
+  TC-7  Diacritic error: 'Xương' instead of 'Xưởng'
+──────────────────────────────────────────────────────────────────────
+
+[RAW BLOCKS]
+  [0] 'MÁY CẮT LASER'
+  [1] 'Mã MMTB : G011'
+  [2] 'Model : FLC-3015'
+  [3] 'Xương : LASER'
+  [4] 'Vị trí : H8'
+
+[MARKDOWN TEXT]
+  'MÁY CẮT LASER'
+  ''
+  'Mã MMTB : G011'
+  ''
+  'Model : FLC-3015'
+  ''
+  'Xương : LASER'
+  ''
+  'Vị trí : H8'
+
+[PARSED KEY-VALUE]
+  'machine_name'            → 'MÁY CẮT LASER'
+  'Mã MMTB'                 → 'G011'
+  'Model'                   → 'FLC-3015'
+  'Xương'                   → 'LASER'
+  'Vị trí'                  → 'H8'
+
+[FIELD TRACKING]
+  ✅ Mã MMTB      raw=Y  md=Y  parsed=Y  value='G011'                lost_at=OK
+  ✅ Model        raw=Y  md=Y  parsed=Y  value='FLC-3015'            lost_at=OK
+  ✅ Xưởng        raw=Y  md=Y  parsed=Y  value='LASER'               lost_at=OK
+  ✅ Vị trí       raw=Y  md=Y  parsed=Y  value='H8'                  lost_at=OK
+
+──────────────────────────────────────────────────────────────────────
+  TC-8  No space after colon  (key:value)
+──────────────────────────────────────────────────────────────────────
+
+[RAW BLOCKS]
+  [0] 'MÁY UỐN ỐNG'
+  [1] 'Mã MMTB:H012'
+  [2] 'Model:PB-50'
+  [3] 'Xưởng:UỐN'
+  [4] 'Vị trí:I9'
+
+[MARKDOWN TEXT]
+  'MÁY UỐN ỐNG'
+  ''
+  'Mã MMTB:H012'
+  ''
+  'Model:PB-50'
+  ''
+  'Xưởng:UỐN'
+  ''
+  'Vị trí:I9'
+
+[PARSED KEY-VALUE]
+  'machine_name'            → 'MÁY UỐN ỐNG'
+  'Mã MMTB'                 → 'H012'
+  'Model'                   → 'PB-50'
+  'Xưởng'                   → 'UỐN'
+  'Vị trí'                  → 'I9'
+
+[FIELD TRACKING]
+  ✅ Mã MMTB      raw=Y  md=Y  parsed=Y  value='H012'                lost_at=OK
+  ✅ Model        raw=Y  md=Y  parsed=Y  value='PB-50'               lost_at=OK
+  ✅ Xưởng        raw=Y  md=Y  parsed=Y  value='UỐN'                 lost_at=OK
+  ✅ Vị trí       raw=Y  md=Y  parsed=Y  value='I9'                  lost_at=OK
+
+══════════════════════════════════════════════════════════════════════
+REGEX UNIT TESTS
+══════════════════════════════════════════════════════════════════════
+  ✔  Input: 'Mã MMTB : B22401469'                          →  parsed=('Mã MMTB', 'B22401469')  expected=('Mã MMTB', 'B22401469')
+  ✔  Input: 'Model : TTC-500T'                             →  parsed=('Model', 'TTC-500T')  expected=('Model', 'TTC-500T')
+  ✔  Input: 'Xương : AH6'                                  →  parsed=('Xương', 'AH6')  expected=('Xương', 'AH6')
+  ✔  Input: 'trí : RHT1'                                   →  parsed=('trí', 'RHT1')  expected=('trí', 'RHT1')
+  ✔  Input: 'Vị trí : C5'                                  →  parsed=('Vị trí', 'C5')  expected=('Vị trí', 'C5')
+  ✔  Input: '**Mã MMTB** : F010'                           →  parsed=('Mã MMTB', 'F010')  expected=('Mã MMTB', 'F010')
+  ✔  Input: '**Model** : DR-13'                            →  parsed=('Model', 'DR-13')  expected=('Model', 'DR-13')
+  ✔  Input: 'Mã MMTB:H012'                                 →  parsed=('Mã MMTB', 'H012')  expected=('Mã MMTB', 'H012')
+  ✔  Input: 'Model - GR-200'                               →  parsed=(None, None)  expected=(None, None)
+  ✔  Input: 'Mã MMTB . E009'                               →  parsed=(None, None)  expected=(None, None)
+  ✔  Input: '| Mã MMTB | C003 |'                           →  parsed=(None, None)  expected=(None, None)
+  ✔  Input: ': HAAS ST-10'                                 →  parsed=(None, None)  expected=(None, None)
+
+Regex tests: 12 passed, 0 failed
+
+======================================================================
+SUMMARY TABLE
+======================================================================
+Test Case  Mã MMTB(raw/md/kv)     Model(raw/md/kv)     Xưởng(raw/md/kv)     Vị trí(raw/md/kv)   
+----------------------------------------------------------------------
+TC-1 Real  ✅Y/Y/Y                 ✅Y/Y/Y               ✅Y/Y/Y               ✅Y/Y/Y              
+TC-2 Value ✅Y/Y/Y                 ❌Y/Y/N               ✅Y/Y/Y               ❌Y/Y/N              
+TC-3 Table ❌Y/Y/N                 ❌Y/Y/N               ❌Y/Y/N               ❌Y/Y/N              
+TC-4 Inline ✅Y/Y/Y                 ✅Y/Y/Y               ✅Y/Y/Y               ✅Y/Y/Y              
+TC-5 OCR   ❌Y/Y/N                 ❌Y/Y/N               ✅Y/Y/Y               ✅Y/Y/Y              
+TC-6 Bold  ✅Y/Y/Y                 ✅Y/Y/Y               ✅Y/Y/Y               ✅Y/Y/Y              
+TC-7 Diacritic ✅Y/Y/Y                 ✅Y/Y/Y               ✅Y/Y/Y               ✅Y/Y/Y              
+TC-8 No    ✅Y/Y/Y                 ✅Y/Y/Y               ✅Y/Y/Y               ✅Y/Y/Y              
+
+======================================================================
+ROOT CAUSE ANALYSIS
+======================================================================
+
+ISSUE 1 – Broken "Vị trí" (Markdown→KV stage)
+   The string "Vị trí" contains a QR/logo image box between "Vị" and
+   "trí" in the physical label layout. PaddleOCR emits:
+     line A:  "Vị"           (no colon → discarded by regex)
+     line B:  "trí : RHT1"  (key extracted as "trí", not "Vị trí")
+   Stage lost: OCR→Markdown (PaddleOCR split the text box).
+   Also Markdown→KV (the truncated key "trí" is not alias-matched to "Vị trí").
+
+ISSUE 2 – Value on next line (Markdown→KV stage)
+   Some labels print the key on one line and the value on the next:
+     "Model"        ← no colon → discarded by the kv_pattern regex
+     ": HAAS ST-10" ← regex requires a key before the colon → discarded
+   The current parser does not do look-ahead / look-behind across lines.
+   Stage lost: Markdown→KV
+
+ISSUE 3 – Table layout not parsed (Markdown→KV stage)
+   Paddle renders some grid-like labels as markdown tables:
+     "| Mã MMTB | C003 |"
+   The kv_pattern regex expects "key : value", not "| key | value |".
+   Pipe characters are never matched. All table fields are silently dropped.
+   Stage lost: Markdown→KV
+
+ISSUE 4 – OCR mis-reads separator character (OCR stage)
+   Occasionally PaddleOCR produces "." or "-" instead of ":".
+     "Mã MMTB . E009"   → regex requires [:：] → not matched → field lost
+     "Model - GR-200"   → same
+   Stage lost: OCR (wrong character) then propagated to Markdown→KV.
+
+ISSUE 5 – Diacritic error: "Xương" vs "Xưởng"
+   The _get_kv alias lookup in initbot.py covers this, BUT only for
+   display/lookup. The raw kv dict stores "Xương" as-is, which does NOT
+   match the canonical key "Xưởng" unless the alias check is applied.
+   The alias list in helpers.KEY_MAPPING does include "xương" so the
+   get_standardized_value function will find it when writing to Sheets.
+   For the bot display in FIELDS, _get_kv in initbot.py also handles it.
+   Risk: Medium – aliasing is fragile and must stay in sync.
+
+ISSUE 6 – HTML image blocks interrupt parsing
+   Paddle wraps extracted images in <div>...</div> blocks inside the
+   markdown. These lines are stripped by the "line.strip()" filter since
+   they are non-empty, so they count as a line. However the regex never
+   matches them (no colon in correct position), so they are silently
+   ignored. The real danger is when the image block splits a multi-line
+   KV pair (see TC-1 real sample: image sits between "Xương : AH6" and
+   "trí : RHT1").
+
+======================================================================
+RECOMMENDATIONS
+======================================================================
+
+R1 – Parse DIRECTLY from the raw OCR JSON blocks (highest priority)
+   The raw Paddle JSONL contains a structured list of text blocks with
+   bounding boxes. Parsing KV pairs from this list is far more reliable
+   than parsing from the re-rendered markdown:
+   • No image interruptions
+   • Each block has spatial position → can detect split keys
+   • Tables appear as adjacent cells, not pipe-separated strings
+   Implementation: replace parse_markdown_to_key_value with a function
+   that reads from result["layoutParsingResults"][i]["structuredBlocks"]
+   or similar raw field in the Paddle JSON.
+
+R2 – Add table-row parser to parse_markdown_to_key_value
+   Add a second regex branch:
+     r"^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|"
+   This captures "| key | value |" patterns with no other code change.
+
+R3 – Add multi-line KV merging
+   After splitting lines, scan for orphan-value lines (starts with ":")
+   and merge them with the previous key-only line:
+     if line.startswith(":") and last_key:
+         kv[last_key] = line[1:].strip()
+
+R4 – Expand separator matching
+   Extend the kv_pattern to accept ".", "–", "-" as separators when
+   followed by a known-field name:
+     r"^(Mã MMTB|Model|Xưởng|Vị trí)\s*[:.：\-\.]\s*(.+)$"
+
+R5 – Fix "Vị trí" split key
+   After collecting all KV pairs, if key "trí" is present but "Vị trí"
+   is absent, promote "trí" → "Vị trí":
+     if "trí" in kv and "Vị trí" not in kv:
+         kv["Vị trí"] = kv.pop("trí")
+
+R6 – Write an integration test that compares raw JSON → final KV
+   Capture one Paddle API response per label type and store as a fixture.
+   Run the full pipeline on each fixture and assert every tracked field
+   is present in the final kv dict.

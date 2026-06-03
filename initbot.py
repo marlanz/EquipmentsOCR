@@ -17,7 +17,7 @@ from telegram.ext import (
     filters,
 )
 
-from app.helpers import append_results_to_sheet_sync
+from app.helpers import append_results_to_sheet_sync, lookup_row_by_mmtb_sync, update_row_in_sheet_sync
 from app.schemas import OCRResult
 import unicodedata
 import re
@@ -56,15 +56,20 @@ GEMINI_ENDPOINT = f"{API_BASE_URL}/parse-text-gemini"
 # ─────────────────────────────────────────────
 # Conversation States
 # ─────────────────────────────────────────────
-SELECT_ENGINE, SELECT_STATUS, CONFIRM_RESULT, EDIT_FIELD, CONFIRM_SAVE = range(5)
+SELECT_ENGINE, SELECT_STATUS, CONFIRM_RESULT, EDIT_FIELD, CONFIRM_SAVE, FIND_ASK_EDIT = range(6)
 
 # Callback data constants
-CB_PADDLE       = "engine:paddle"
-CB_GEMINI       = "engine:gemini"
-CB_CONFIRM_YES  = "confirm:yes"
-CB_CONFIRM_EDIT = "confirm:edit"
-CB_SAVE_CONFIRM = "save:confirm"
-CB_SAVE_EDIT    = "save:edit_again"
+CB_PADDLE          = "engine:paddle"
+CB_GEMINI          = "engine:gemini"
+CB_CONFIRM_YES     = "confirm:yes"
+CB_CONFIRM_EDIT    = "confirm:edit"
+CB_SAVE_CONFIRM    = "save:confirm"
+CB_SAVE_EDIT       = "save:edit_again"
+# /f find-and-edit flow
+CB_FIND_EDIT_YES   = "find:edit_yes"
+CB_FIND_EDIT_NO    = "find:edit_no"
+CB_FIND_SAVE       = "find_save:confirm"
+CB_FIND_EDIT_AGAIN = "find_save:edit_again"
 
 # Fields to loop through during correction: (display label, key_value dict key)
 FIELDS = [
@@ -192,7 +197,7 @@ def _format_result(kv: dict, markdown_text: str, engine_name: str, processing_ti
 # ─────────────────────────────────────────────
 async def create_workshop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    match = re.match(r'^/(?:ws)(?:\s+(.+))?$', text, re.IGNORECASE)
+    match = re.match(r'^/(?:x)(?:\s+(.+))?$', text, re.IGNORECASE)
     
     workshop_name = match.group(1).strip() if (match and match.group(1)) else ""
     user_id = update.effective_user.id
@@ -228,7 +233,7 @@ async def create_workshop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ─────────────────────────────────────────────
 async def set_location_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    match = re.match(r'^/(?:col|line)(?:\s+(.+))?$', text, re.IGNORECASE)
+    match = re.match(r'^/(?:col|l)(?:\s+(.+))?$', text, re.IGNORECASE)
 
     location_value = match.group(1).strip() if (match and match.group(1)) else ""
     user_id = update.effective_user.id
@@ -288,8 +293,9 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "*Lệnh:*\n"
         "/start  — Bắt đầu lại\n"
         "/cancel — Huỷ thao tác hiện tại\n"
-        "/ws [tên\_xưởng] — Thiết lập xưởng mặc định\n"
-        "/line [vị\_trí]   — Thiết lập vị trí mặc định\n"
+        "/x [tên_xưởng] — Thiết lập xưởng mặc định\n"
+        "/l [vị_trí]   — Thiết lập vị trí mặc định\n"
+        "/f [mã_mmtb]   — Tìm MMTB có sẵn\n"
         "/help   — Xem hướng dẫn này",
         parse_mode="Markdown",
     )
@@ -716,9 +722,14 @@ async def _show_correction_summary(context: ContextTypes.DEFAULT_TYPE, chat_id: 
         kv, markdown_text, engine_name, proc_time
     )
 
+    # Route save/edit buttons to the correct callback prefix depending on flow
+    is_find_edit = context.user_data.get("is_find_edit", False)
+    save_cb = CB_FIND_SAVE       if is_find_edit else CB_SAVE_CONFIRM
+    edit_cb = CB_FIND_EDIT_AGAIN if is_find_edit else CB_SAVE_EDIT
+
     save_kb = [[
-        InlineKeyboardButton("💾 Xác nhận & Lưu", callback_data=CB_SAVE_CONFIRM),
-        InlineKeyboardButton("🔁 Sửa lại từ đầu",  callback_data=CB_SAVE_EDIT),
+        InlineKeyboardButton("💾 Xác nhận & Lưu", callback_data=save_cb),
+        InlineKeyboardButton("🔁 Sửa lại từ đầu",  callback_data=edit_cb),
     ]]
 
     await context.bot.send_message(
@@ -790,6 +801,180 @@ async def handle_save_confirmation(update: Update, context: ContextTypes.DEFAULT
     return ConversationHandler.END
 
 
+# ═════════════════════════════════════════════
+# /f command — look up Mã MMTB in Google Sheets
+# ═════════════════════════════════════════════
+async def find_mmtb_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Entry point for /f <mã>. Searches the sheet and offers an edit option."""
+    text  = update.message.text.strip()
+    match = re.match(r'^/f(?:\s+(.+))?$', text, re.IGNORECASE)
+    mmtb_code = match.group(1).strip() if (match and match.group(1)) else ""
+
+    if not mmtb_code:
+        await update.message.reply_text(
+            "🔍 Vui lòng nhập mã MMTB cần tìm.\n"
+            "Ví dụ: `/f B001`",
+            parse_mode="Markdown",
+        )
+        return ConversationHandler.END
+
+    await update.message.reply_text(
+        f"🔍 Đang tìm kiếm mã MMTB: `{mmtb_code}`...",
+        parse_mode="Markdown",
+    )
+
+    try:
+        result = await asyncio.to_thread(lookup_row_by_mmtb_sync, mmtb_code)
+    except Exception as e:
+        logging.exception(e)
+        await update.message.reply_text(
+            f"❌ Lỗi khi tìm kiếm:\n`{str(e)}`",
+            parse_mode="Markdown",
+        )
+        return ConversationHandler.END
+
+    if not result:
+        await update.message.reply_text(
+            f"⚠️ Không tìm thấy mã MMTB `{mmtb_code}` trong Google Sheets.\n"
+            "Kiểm tra lại mã hoặc thêm thiết bị bằng cách gửi ảnh.",
+            parse_mode="Markdown",
+        )
+        return ConversationHandler.END
+
+    kv        = result["kv"]
+    row_index = result["row_index"]
+
+    # Stash for the edit flow
+    context.user_data["find_kv"]        = kv
+    context.user_data["find_row_index"] = row_index
+    context.user_data["find_mmtb_code"] = mmtb_code
+
+    # Build display summary
+    msg = f"✅ *Tìm thấy — Mã MMTB: `{mmtb_code}`*\n\n"
+    for label, key in FIELDS:
+        msg += f"{label}: *{_get_kv(kv, key)}*\n"
+    msg += "\n❓ *Bạn có muốn chỉnh sửa thông tin này không?*"
+
+    edit_kb = [[
+        InlineKeyboardButton("✏️ Sửa thông tin", callback_data=CB_FIND_EDIT_YES),
+        InlineKeyboardButton("❌ Không, đóng",   callback_data=CB_FIND_EDIT_NO),
+    ]]
+
+    await update.message.reply_text(
+        msg,
+        reply_markup=InlineKeyboardMarkup(edit_kb),
+        parse_mode="Markdown",
+    )
+    return FIND_ASK_EDIT
+
+
+# ─────────────────────────────────────────────
+# /f flow — user answers Yes / No to edit prompt
+# ─────────────────────────────────────────────
+async def handle_find_edit_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == CB_FIND_EDIT_NO:
+        await query.edit_message_text(
+            "❌ Đã đóng. Gửi ảnh hoặc dùng /f để tìm kiếm tiếp."
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    # ── CB_FIND_EDIT_YES: enter the shared field-edit loop ────────────
+    context.user_data["kv"]             = dict(context.user_data.get("find_kv", {}))
+    context.user_data["markdown_text"]  = ""
+    context.user_data["engine_name"]    = "Chỉnh sửa"
+    context.user_data["processing_time"] = "—"
+    context.user_data["field_index"]    = 0
+    context.user_data["is_find_edit"]   = True   # signals save → update, not append
+
+    await query.edit_message_text(
+        "✏️ *Bắt đầu sửa thông tin...*\n\n"
+        "Nhập giá trị mới hoặc bấm nút *Giữ nguyên* để giữ giá trị cũ.",
+        parse_mode="Markdown",
+    )
+    return await _ask_next_field(context, query.message.chat_id)
+
+
+# ─────────────────────────────────────────────
+# /f flow — final save: update the existing row
+# ─────────────────────────────────────────────
+async def handle_find_save_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == CB_FIND_EDIT_AGAIN:
+        # Restart the field loop from the beginning
+        context.user_data["field_index"] = 0
+        await query.edit_message_text(
+            "🔁 *Sửa lại từ đầu...*\n\nGửi `-` nếu muốn giữ nguyên.",
+            parse_mode="Markdown",
+        )
+        return await _ask_next_field(context, query.message.chat_id)
+
+    # ── CB_FIND_SAVE: write corrected data back to the same sheet row ──
+    if context.user_data.get("sheets_saved"):
+        await query.edit_message_text(
+            "✅ Dữ liệu đã được cập nhật rồi. Gửi ảnh mới hoặc dùng /f để tiếp tục."
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    await query.edit_message_text(
+        "💾 *Đang cập nhật dữ liệu vào Google Sheets...*",
+        parse_mode="Markdown",
+    )
+
+    kv        = context.user_data["kv"]
+    row_index = context.user_data.get("find_row_index")
+    mmtb_code = context.user_data.get("find_mmtb_code", "")
+
+    logging.info(
+        f"[BOT] Updating sheet row {row_index} for Mã MMTB '{mmtb_code}' "
+        "from FIND_UPDATE step"
+    )
+
+    try:
+        ocr_result = OCRResult(
+            markdown=context.user_data.get("markdown_text", ""),
+            key_value=kv,
+        )
+        from app.helpers import extract_row_data
+        row_data = extract_row_data(ocr_result.key_value)
+
+        success = await asyncio.to_thread(
+            update_row_in_sheet_sync, row_index, row_data, "FIND_UPDATE"
+        )
+
+        if success:
+            context.user_data["sheets_saved"] = True
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=(
+                    f"✅ *Đã cập nhật thành công mã MMTB `{mmtb_code}` vào Google Sheets!*\n\n"
+                    "Gửi ảnh mới hoặc dùng /f để tiếp tục."
+                ),
+                parse_mode="Markdown",
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="⚠️ Cập nhật Google Sheets thất bại. Vui lòng thử lại.",
+            )
+    except Exception as e:
+        logging.exception(e)
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=f"⚠️ Lỗi khi cập nhật:\n`{str(e)}`",
+            parse_mode="Markdown",
+        )
+
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
 # ─────────────────────────────────────────────
 # Fallback: unexpected text outside EDIT_FIELD state
 # ─────────────────────────────────────────────
@@ -837,6 +1022,7 @@ async def handle_unexpected_text(update: Update, context: ContextTypes.DEFAULT_T
 conv_handler = ConversationHandler(
     entry_points=[
         MessageHandler(filters.PHOTO, handle_photo),
+        CommandHandler("f", find_mmtb_cmd),      # /f <mã> — find & edit flow
     ],
     states={
         SELECT_ENGINE: [
@@ -854,7 +1040,12 @@ conv_handler = ConversationHandler(
             CallbackQueryHandler(handle_edit_keep_callback, pattern="^edit:keep"),
         ],
         CONFIRM_SAVE: [
-            CallbackQueryHandler(handle_save_confirmation, pattern="^save:"),
+            CallbackQueryHandler(handle_save_confirmation,      pattern="^save:"),
+            CallbackQueryHandler(handle_find_save_confirmation, pattern="^find_save:"),
+        ],
+        # ── /f find-and-edit states ───────────────────────────────────────
+        FIND_ASK_EDIT: [
+            CallbackQueryHandler(handle_find_edit_choice, pattern="^find:"),
         ],
     },
     fallbacks=[
@@ -870,8 +1061,8 @@ app = ApplicationBuilder().token(BOT_TOKEN).build()
 app.add_handler(CommandHandler("start",  start))
 app.add_handler(CommandHandler("help",   help_cmd))
 app.add_handler(CommandHandler("cancel", cancel))
-app.add_handler(MessageHandler(filters.Regex(r'^/(ws)\b'), create_workshop_cmd))
-app.add_handler(MessageHandler(filters.Regex(r'^/(line)\b'), set_location_cmd))
+app.add_handler(MessageHandler(filters.Regex(r'^/(x)\b'), create_workshop_cmd))
+app.add_handler(MessageHandler(filters.Regex(r'^/(l)\b'), set_location_cmd))
 app.add_handler(conv_handler)
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unexpected_text))
 

@@ -33,6 +33,7 @@ from app.config import (
     logger,
 )
 from app.schemas import OCRResult
+from app.paddle_transformer import transform_paddleocr_result
 
 # --- PaddleOCR Validation Limits ---
 PADDLE_MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB limit
@@ -306,7 +307,11 @@ async def download_and_parse_jsonl(jsonl_url: str) -> List[OCRResult]:
 
             for res in result.get("layoutParsingResults", []):
                 markdown_text = res.get("markdown", {}).get("text", "")
-                key_value = parse_markdown_to_key_value(markdown_text)
+
+                # Use the dedicated PaddleOCR transformer instead of the
+                # generic markdown parser.  Gemini pipeline is unaffected.
+                parsed    = transform_paddleocr_result(res)
+                key_value = parsed.key_value
 
                 pages.append(
                     OCRResult(
@@ -680,3 +685,109 @@ async def append_results_to_sheet(
         return []
     return await asyncio.to_thread(append_results_to_sheet_sync, results, source)
 
+
+
+def lookup_row_by_mmtb_sync(mmtb_code: str) -> Optional[dict]:
+    """Looks up a row in the Google Sheet by Mã MMTB value (fuzzy/diacritic-insensitive).
+
+    Returns:
+        A dict with:
+            'row_index' – 1-based sheet row number (header = row 1, data starts at 2)
+            'kv'        – dict mapping standard field keys to their cell values
+        or None if not found or on error.
+    """
+    if not GOOGLE_SHEETS_ENABLED:
+        logger.warning("[lookup_row_by_mmtb] Google Sheets disabled.")
+        return None
+
+    gsclient = get_gspread_client()
+    if not gsclient:
+        return None
+
+    try:
+        spreadsheet = gsclient.open(GOOGLE_SHEETS_NAME)
+        worksheet   = spreadsheet.get_worksheet(0)
+        all_values  = worksheet.get_all_values()
+
+        if not all_values or len(all_values) < 2:
+            return None
+
+        norm_search = _normalize(mmtb_code)
+
+        # Column index for Mã MMTB is 1 (second column) per sheet convention
+        MMTB_COL_IDX = 1
+
+        # Canonical mapping: sheet column index → internal kv key
+        col_to_key = {
+            0: "machine_name",
+            1: "Mã MMTB",
+            2: "Model",
+            3: "Xưởng",
+            4: "Vị trí",
+            5: "status",
+        }
+
+        for row_num, row in enumerate(all_values[1:], start=2):  # skip header row
+            if len(row) > MMTB_COL_IDX:
+                cell_val = row[MMTB_COL_IDX].strip()
+                if _normalize(cell_val) == norm_search:
+                    kv = {}
+                    for col_idx, val in enumerate(row):
+                        key = col_to_key.get(col_idx, f"col_{col_idx}")
+                        kv[key] = val.strip()
+                    logger.info(
+                        f"[lookup_row_by_mmtb] Found '{mmtb_code}' at row {row_num}."
+                    )
+                    return {"row_index": row_num, "kv": kv}
+
+        logger.info(f"[lookup_row_by_mmtb] '{mmtb_code}' not found in sheet.")
+        return None
+
+    except Exception as exc:
+        logger.error(f"[lookup_row_by_mmtb] Error: {exc}", exc_info=True)
+        return None
+
+
+def update_row_in_sheet_sync(
+    row_index: int,
+    row_data: list,
+    source: str = "FIND_UPDATE",
+) -> bool:
+    """Updates a specific row in the Google Sheet in-place.
+
+    Args:
+        row_index: 1-based row number in the sheet (row 1 = header row).
+        row_data:  List of cell values ordered as
+                   [machine_name, ma_mmtb, model, xuong, vi_tri, status].
+        source:    Human-readable caller label used in log messages.
+
+    Returns:
+        True on success, False on error or when sheets are disabled.
+    """
+    if not GOOGLE_SHEETS_ENABLED:
+        logger.warning(f"[{source}] Google Sheets disabled. Update skipped.")
+        return False
+
+    gsclient = get_gspread_client()
+    if not gsclient:
+        return False
+
+    try:
+        spreadsheet = gsclient.open(GOOGLE_SHEETS_NAME)
+        worksheet   = spreadsheet.get_worksheet(0)
+
+        num_cols  = len(row_data)
+        col_end   = chr(ord('A') + num_cols - 1)          # e.g. 6 cols → 'F'
+        cell_range = f"A{row_index}:{col_end}{row_index}"
+
+        worksheet.update(cell_range, [row_data])
+        logger.info(
+            f"[{source}] Row {row_index} updated successfully → {row_data}"
+        )
+        return True
+
+    except Exception as exc:
+        logger.error(
+            f"[{source}] Error updating row {row_index}: {exc}", exc_info=True
+        )
+        return False
