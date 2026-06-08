@@ -715,3 +715,67 @@ class TestBrandingAndMachineName:
         assert result.key_value.get("Model") == "CM-500A"
         assert result.key_value.get("Xưởng") == "AH2"
         assert result.key_value.get("Vị trí") == "TỔ HÀN LINE 1 (A20-21)"
+
+    def test_failed_case_6(self):
+        # Case 6 from raw.json — DAIDUNG brand + bullet-prefixed keys
+        # Verifies: anchor-walk finds real machine name, bullet-prefixed keys cleaned
+        md = (
+            "## DAIDUNG\n"
+            "\n"
+            "MẠY HÀN QUE - HK 500D, HÒNG KÝ\n"
+            "\n"
+            "- Mã: B22400193\n"
+            "\n"
+            "- Model: HK 500D\n"
+            "\n"
+            "- Xuất xử: Việt Nam\n"
+            "\n"
+            "## TỔ QUẬN\n"
+            "\n"
+            "TỔ RẠI"
+        )
+        res = make_res(markdown=md)
+        result = transform_paddleocr_result(res)
+        kv = result.key_value
+        # Anchor-walk must skip the DAIDUNG brand and pick the real machine name
+        assert kv.get("machine_name") == "MẠY HÀN QUE - HK 500D, HÒNG KÝ"
+        # "- Mã" must be normalised to "Mã MMTB" (bullet stripped + alias matched)
+        assert kv.get("Mã MMTB") == "B22400193"
+        # "- Model" must be cleaned to "Model"
+        assert kv.get("Model") == "HK 500D"
+        # "- Xuất xử" must be stored without leading bullet dash
+        raw_key_present = "Xuất xử" in kv or "Xuất xứ" in kv
+        assert raw_key_present, f"Expected 'Xuất xứ' or 'Xuất xử' in kv, got: {list(kv.keys())}"
+        # No bullet-prefixed keys should remain
+        for k in kv:
+            assert not k.startswith("-"), f"Key {k!r} still has a leading dash"
+
+    def test_failed_case_7(self):
+        # Case 7 from raw.json — DRIDUNG brand, model spec on separate line
+        # Verifies: branding blocked, closest non-branding non-numeric line is machine_name
+        md = (
+            "DRIDUNG\n"
+            "\n"
+            "Máy hàn AOTAI ASAW\n"
+            "\n"
+            "1250ACDC\n"
+            "\n"
+            "Mã MMTB: B22401852\n"
+            "\n"
+            "Model: ASAW 1250ACDC\n"
+            "\n"
+            "Xuất xứ : Trung Quốc\n"
+            "\n"
+            "Ví Trí : AH2"
+        )
+        res = make_res(markdown=md)
+        result = transform_paddleocr_result(res)
+        kv = result.key_value
+        # DRIDUNG is brand — anchor-walk should find "Máy hàn AOTAI ASAW"
+        assert kv.get("machine_name") == "Máy hàn AOTAI ASAW"
+        assert kv.get("Mã MMTB") == "B22401852"
+        assert kv.get("Model") == "ASAW 1250ACDC"
+        # "Ví Trí" is a corrupted "Vị trí" — must be normalised
+        assert kv.get("Vị trí") == "AH2", (
+            f"Expected 'Vị trí'='AH2', got kv={kv}"
+        )

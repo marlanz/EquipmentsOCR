@@ -26,10 +26,15 @@ from app.config import (
     MAX_WAIT_SECONDS,
     GEMINI_API_KEY,
     GEMINI_MODEL,
+    GEMINI_API_KEY_2,
+    GEMINI_MODEL_2,
+    GEMINI_API_KEY_3,
+    GEMINI_MODEL_3,
     GOOGLE_SHEETS_CREDENTIALS_JSON,
     GOOGLE_SHEETS_CREDENTIALS_PATH,
     GOOGLE_SHEETS_NAME,
     GOOGLE_SHEETS_ENABLED,
+    GOOGLE_SHEETS_DEDUP_ENABLED,
     logger,
 )
 from app.schemas import OCRResult
@@ -45,13 +50,27 @@ GEMINI_MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB limit
 GEMINI_ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 GEMINI_ALLOWED_MIME_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 
-# Initialize Gemini Client if API key is present
+# Initialize Gemini Clients if API keys are present
 client: Optional[genai.Client] = None
 if GEMINI_API_KEY:
-    logger.info("Initializing Google GenAI client...")
+    logger.info(f"Initializing Google GenAI client 1 for model {GEMINI_MODEL}...")
     client = genai.Client(api_key=GEMINI_API_KEY)
 else:
-    logger.warning("GEMINI_API_KEY not configured. client will be initialized as None.")
+    logger.warning("GEMINI_API_KEY not configured. Client 1 will be initialized as None.")
+
+client2: Optional[genai.Client] = None
+if GEMINI_API_KEY_2:
+    logger.info(f"Initializing Google GenAI client 2 for model {GEMINI_MODEL_2}...")
+    client2 = genai.Client(api_key=GEMINI_API_KEY_2)
+else:
+    logger.warning("GEMINI_API_KEY_2 not configured. Client 2 will be initialized as None.")
+
+client3: Optional[genai.Client] = None
+if GEMINI_API_KEY_3:
+    logger.info(f"Initializing Google GenAI client 3 for model {GEMINI_MODEL_3}...")
+    client3 = genai.Client(api_key=GEMINI_API_KEY_3)
+else:
+    logger.warning("GEMINI_API_KEY_3 not configured. Client 3 will be initialized as None.")
 
 
 class EquipmentOCRResult(BaseModel):
@@ -406,15 +425,25 @@ def is_rate_limit_error(exception: Exception) -> bool:
     retry=retry_if_exception(is_rate_limit_error),
     reraise=True
 )
-def call_gemini_ocr(image: Image.Image) -> genai.types.GenerateContentResponse:
+def call_gemini_ocr(image: Image.Image, model_index: int = 1) -> genai.types.GenerateContentResponse:
     """Synchronous Gemini model call. Wrapped in tenacity retry policy."""
-    if not client:
-        logger.error("Attempted to call Gemini OCR but client is not initialized.")
-        raise RuntimeError("Gemini Client is not initialized due to missing API key.")
+    selected_client = client
+    selected_model = GEMINI_MODEL
 
-    logger.info(f"Executing Gemini {GEMINI_MODEL} structured OCR request...")
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
+    if model_index == 2:
+        selected_client = client2
+        selected_model = GEMINI_MODEL_2
+    elif model_index == 3:
+        selected_client = client3
+        selected_model = GEMINI_MODEL_3
+
+    if not selected_client:
+        logger.error(f"Attempted to call Gemini OCR but client {model_index} is not initialized.")
+        raise RuntimeError(f"Gemini Client {model_index} is not initialized due to missing API key.")
+
+    logger.info(f"Executing Gemini {selected_model} structured OCR request...")
+    response = selected_client.models.generate_content(
+        model=selected_model,
         contents=[
             image,
             "Perform OCR on this equipment label image. "
@@ -432,11 +461,19 @@ def call_gemini_ocr(image: Image.Image) -> genai.types.GenerateContentResponse:
 
 async def check_gemini_connectivity() -> bool:
     """Asynchronously checks Gemini credentials and network connectivity."""
-    if not client:
+    active_clients = []
+    if client:
+        active_clients.append(client)
+    if client2:
+        active_clients.append(client2)
+    if client3:
+        active_clients.append(client3)
+
+    if not active_clients:
         return False
     try:
         def _check():
-            for _ in client.models.list(config={"page_size": 1}):
+            for _ in active_clients[0].models.list(config={"page_size": 1}):
                 return True
             return False
         return await asyncio.to_thread(_check)
@@ -627,22 +664,30 @@ def append_results_to_sheet_sync(
             f"[{source}] Dedup window contains {len(existing_ma_mmtb)} unique Mã MMTB values."
         )
 
+        # Sentinel values that can appear multiple times (no real code assigned yet)
+        DEDUP_EXEMPT = {"chưa có mã", "chua co ma"}
+
         # ── Filter out duplicates and build insert batch ───────────────────
         rows_to_insert = []
         for result in results:
-            row      = extract_row_data(result.key_value)
-            ma_mmtb  = row[1].strip().lower() if len(row) > 1 else ""
+            row     = extract_row_data(result.key_value)
+            ma_mmtb = row[1].strip().lower() if len(row) > 1 else ""
 
-            if ma_mmtb and ma_mmtb in existing_ma_mmtb:
-                logger.warning(
-                    f"[{source}] DUPLICATE SKIPPED — Mã MMTB '{row[1]}' "
-                    f"already exists in the last {DEDUP_WINDOW} rows."
-                )
-                continue
+            if GOOGLE_SHEETS_DEDUP_ENABLED:
+                if ma_mmtb and ma_mmtb not in DEDUP_EXEMPT and ma_mmtb in existing_ma_mmtb:
+                    logger.warning(
+                        f"[{source}] DUPLICATE SKIPPED — Mã MMTB '{row[1]}' "
+                        f"already exists in the last {DEDUP_WINDOW} rows."
+                    )
+                    continue
+                # Only track real codes in the dedup set (not sentinel values)
+                if ma_mmtb and ma_mmtb not in DEDUP_EXEMPT:
+                    existing_ma_mmtb.add(ma_mmtb)  # guard within same batch
+            else:
+                logger.debug(f"[{source}] Dedup disabled — skipping duplicate check for '{row[1]}'.")
 
             rows_to_insert.append(row)
             if ma_mmtb:
-                existing_ma_mmtb.add(ma_mmtb)   # guard against duplicates within the same batch
                 inserted_ids.append(row[1])
 
         # ── Batch append ───────────────────────────────────────────────────

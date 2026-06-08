@@ -47,6 +47,7 @@ _ALIAS_MAP: Dict[str, str] = {
     "ma mmtb":       "Mã MMTB",
     "ma mtb":        "Mã MMTB",
     "m mmtb":        "Mã MMTB",
+    "ma":            "Mã MMTB",
     # ── Model ─────────────────────────────────────────────────────────────────
     "model":         "Model",
     "mo hinh":       "Model",
@@ -73,7 +74,7 @@ _ALIAS_MAP: Dict[str, str] = {
 }
 
 # Short aliases (len < 4) are only used as last resort to avoid false positives
-_SHORT_ALIASES = {"px", "vi"}
+_SHORT_ALIASES = {"px", "vi", "ma"}
 
 # Compiled regexes — defined once at module level for performance
 _RE_KV_STANDARD = re.compile(
@@ -97,6 +98,8 @@ _RE_ALT_SEP = re.compile(r"^[:.：\-\.\s]+")
 # Values are diacritic-stripped, lowercase.
 _BRANDING_BLOCKLIST: frozenset = frozenset({
     "daidung",
+    "dridung",
+    "daidong",
     "dai dung",
     "dai oung",
     "dai dung",   # ĐẠI DŨNG normalized
@@ -135,6 +138,7 @@ _ANCHOR_PATTERNS_NORM: Tuple[str, ...] = (
     "ma may",
     "mamay",
     "ma mtb",
+    "ma",
 )
 
 # Helpers for machine_name extraction
@@ -177,6 +181,8 @@ def normalize_key(raw_key: str) -> Optional[str]:
 
     s    = raw_key.strip()
     norm = _normalize(s)
+    # Clean leading/trailing symbols commonly used for bullets/formatting
+    norm = re.sub(r"^[\s\-\*•\.\:_]+|[\s\-\*•\.\:_]+$", "", norm)
 
     # 1. Exact alias
     if norm in _ALIAS_MAP:
@@ -394,6 +400,8 @@ def _parse_kv_from_text(text: str) -> Optional[Tuple[str, str]]:
     m = _RE_KV_STANDARD.match(text)
     if m:
         k = _RE_STRIP_BOLD.sub("", m.group(1).strip()).strip()
+        # Also strip leading bullet/dash characters from the key
+        k = re.sub(r"^[-\*•\s]+", "", k).strip()
         v = _RE_STRIP_BOLD.sub("", m.group(2).strip()).strip()
         if k:
             return (k, v)   # v may be empty (key-only line)
@@ -660,11 +668,17 @@ def _normalise_kv_keys(kv: Dict[str, str]) -> Dict[str, str]:
     """
     Runs every key in the kv dict through normalize_key and re-maps it
     to the canonical name.  Does not overwrite already-canonical values.
+    Also strips leading bullet/dash chars from any unmapped raw keys.
     """
     result: Dict[str, str] = {}
     for k, v in kv.items():
         canonical = normalize_key(k)
-        final_key = canonical if canonical else k
+        if canonical:
+            final_key = canonical
+        else:
+            # Clean up bullet/dash prefix from unrecognised raw keys
+            clean_k = re.sub(r"^[-\*•\s]+", "", k).strip()
+            final_key = clean_k if clean_k else k
         # Don't overwrite an already-present canonical key
         if final_key not in result:
             result[final_key] = v
@@ -786,6 +800,11 @@ def _is_branding_line(text: str) -> bool:
         if len(brand) >= 5 and norm.startswith(brand):
             return True
 
+    # Digit check: model numbers / specifications (containing digits) are not branding
+    c = re.sub(r"^[\s\-\*•\.\:_]+", "", clean).strip()
+    if any(char.isdigit() for char in c):
+        return False
+
     # Heuristic: ALL-CAPS + short + no equipment keywords.
     # ALL-CAPS check: no ASCII lowercase letters AND no lowercase Vietnamese chars.
     has_ascii_lower = bool(re.search(r"[a-z]", clean))
@@ -863,9 +882,14 @@ def _extract_machine_name_from_lines(text_lines: List[str]) -> Optional[str]:
         norm_stripped = _normalize(stripped.split("/")[0])  # handle "Mã MMTB/Code MMTB"
         norm_full     = _normalize(line)
         for pat in _ANCHOR_PATTERNS_NORM:
-            if norm_stripped.startswith(pat) or pat in norm_full:
-                anchor_idx = i
-                break
+            if pat == "ma":
+                if re.search(r"\bma\b", norm_stripped):
+                    anchor_idx = i
+                    break
+            else:
+                if norm_stripped.startswith(pat) or pat in norm_full:
+                    anchor_idx = i
+                    break
         if anchor_idx is not None:
             break
 

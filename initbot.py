@@ -42,6 +42,10 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite").strip()
+GEMINI_MODEL_2 = os.getenv("GEMINI_MODEL_2", "gemini-2.5-flash").strip()
+GEMINI_MODEL_3 = os.getenv("GEMINI_MODEL_3", "gemini-2.5-pro").strip()
+
 # Build API base URL.
 # Priority: API_BASE_URL > OCR_API_URL (legacy, path stripped automatically)
 API_BASE_URL = os.getenv("API_BASE_URL", "").strip().rstrip("/")
@@ -65,6 +69,9 @@ CFG_SELECT_FACTORY, CFG_SELECT_WORKSHOP, CFG_SELECT_LETTER, CFG_SELECT_NUMBER = 
 # Callback data constants
 CB_PADDLE          = "engine:paddle"
 CB_GEMINI          = "engine:gemini"
+CB_GEMINI_1        = "engine:gemini1"
+CB_GEMINI_2        = "engine:gemini2"
+CB_GEMINI_3        = "engine:gemini3"
 CB_CONFIRM_YES     = "confirm:yes"
 CB_CONFIRM_EDIT    = "confirm:edit"
 CB_SAVE_CONFIRM    = "save:confirm"
@@ -74,6 +81,10 @@ CB_FIND_EDIT_YES   = "find:edit_yes"
 CB_FIND_EDIT_NO    = "find:edit_no"
 CB_FIND_SAVE       = "find_save:confirm"
 CB_FIND_EDIT_AGAIN = "find_save:edit_again"
+# /n manual-add flow
+CB_MANUAL_SAVE     = "manual_save:confirm"
+CB_MANUAL_EDIT     = "manual_save:edit_again"
+CB_SKIP_FIELD      = "edit:skip"
 
 # Fields to loop through during correction: (display label, key_value dict key)
 FIELDS = [
@@ -569,6 +580,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/x      — Màn hình cấu hình Xưởng & Vị trí\n"
         "/l [vị_trí]   — Thiết lập vị trí cột nhanh\n"
         "/f [mã_mmtb]   — Tìm MMTB có sẵn\n"
+        "/n      — Thêm thiết bị thủ công\n"
         "/help   — Xem hướng dẫn này",
         parse_mode="HTML",
     )
@@ -593,10 +605,12 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photo = update.message.photo[-1]          # largest available resolution
     context.user_data["pending_file_id"] = photo.file_id
 
-    keyboard = [[
-        InlineKeyboardButton("🔵 Paddle OCR", callback_data=CB_PADDLE),
-        InlineKeyboardButton("✨ Gemini OCR", callback_data=CB_GEMINI),
-    ]]
+    keyboard = [
+        [InlineKeyboardButton("🔵 Paddle OCR", callback_data=CB_PADDLE)],
+        [InlineKeyboardButton(f"✨ Gemini {GEMINI_MODEL}", callback_data=CB_GEMINI_1)],
+        [InlineKeyboardButton(f"✨ Gemini {GEMINI_MODEL_2}", callback_data=CB_GEMINI_2)],
+        [InlineKeyboardButton(f"✨ Gemini {GEMINI_MODEL_3}", callback_data=CB_GEMINI_3)],
+    ]
     await update.message.reply_text(
         "🖼️ Ảnh đã nhận! Chọn engine OCR để xử lý:",
         reply_markup=InlineKeyboardMarkup(keyboard),
@@ -613,8 +627,20 @@ async def handle_engine_choice(update: Update, context: ContextTypes.DEFAULT_TYP
 
     engine      = query.data
     file_id     = context.user_data.get("pending_file_id")
-    engine_name = "Paddle OCR" if engine == CB_PADDLE else "Gemini OCR"
-    endpoint    = PADDLE_ENDPOINT if engine == CB_PADDLE else GEMINI_ENDPOINT
+    if engine == CB_PADDLE:
+        engine_name = "Paddle OCR"
+        endpoint    = PADDLE_ENDPOINT
+    else:
+        model_index = 1
+        model_name = GEMINI_MODEL
+        if engine == CB_GEMINI_2:
+            model_index = 2
+            model_name = GEMINI_MODEL_2
+        elif engine == CB_GEMINI_3:
+            model_index = 3
+            model_name = GEMINI_MODEL_3
+        engine_name = f"Gemini {model_name}"
+        endpoint    = f"{GEMINI_ENDPOINT}?model_index={model_index}"
 
     context.user_data["engine_name"] = engine_name
 
@@ -713,11 +739,16 @@ async def handle_engine_choice(update: Update, context: ContextTypes.DEFAULT_TYP
             parse_mode="Markdown",
         )
 
-        status_kb = [[
-            InlineKeyboardButton("🟢 Đang hoạt động", callback_data="status:active"),
-            InlineKeyboardButton("🔴 Ngưng hoạt động", callback_data="status:inactive"),
-            InlineKeyboardButton("⚠️ Đã thanh lý", callback_data="status:disposed"),
-        ]]
+        status_kb = [
+            [
+                InlineKeyboardButton("🟢 Đang hoạt động", callback_data="status:active"),
+                InlineKeyboardButton("🔴 Ngưng hoạt động", callback_data="status:inactive"),
+            ],
+            [
+                InlineKeyboardButton("⚠️ Đã thanh lý", callback_data="status:disposed"),
+                InlineKeyboardButton("🏷️ Chưa dán tem", callback_data="status:no_label"),
+            ],
+        ]
         await context.bot.send_message(
             chat_id=query.message.chat_id,
             text="⚡ *Chọn trạng thái thiết bị:*",
@@ -751,9 +782,10 @@ async def handle_status_choice(update: Update, context: ContextTypes.DEFAULT_TYP
 
     status_data = query.data
     status_map = {
-        "status:active": "Đang hoạt động",
+        "status:active":   "Đang hoạt động",
         "status:inactive": "Ngưng hoạt động",
         "status:disposed": "Đã thanh lý",
+        "status:no_label": "Chưa dán tem",
     }
     chosen_status = status_map.get(status_data, "—")
     
@@ -878,11 +910,15 @@ async def _ask_next_field(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
             [
                 InlineKeyboardButton("🟢 Đang hoạt động", callback_data="status:active"),
                 InlineKeyboardButton("🔴 Ngưng hoạt động", callback_data="status:inactive"),
+            ],
+            [
                 InlineKeyboardButton("⚠️ Đã thanh lý", callback_data="status:disposed"),
+                InlineKeyboardButton("🏷️ Chưa dán tem", callback_data="status:no_label"),
             ],
             [
                 InlineKeyboardButton("↩️ Giữ nguyên", callback_data="status:keep"),
-            ]
+                InlineKeyboardButton("⏭️ Bỏ qua", callback_data="edit:skip"),
+            ],
         ]
         await context.bot.send_message(
             chat_id=chat_id,
@@ -897,6 +933,7 @@ async def _ask_next_field(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
     else:
         keyboard = [[
             InlineKeyboardButton("↩️ Giữ nguyên", callback_data="edit:keep"),
+            InlineKeyboardButton("⏭️ Bỏ qua", callback_data="edit:skip"),
         ]]
         await context.bot.send_message(
             chat_id=chat_id,
@@ -945,9 +982,10 @@ async def handle_status_callback(update: Update, context: ContextTypes.DEFAULT_T
 
     status_data = query.data
     status_map = {
-        "status:active": "Đang hoạt động",
+        "status:active":   "Đang hoạt động",
         "status:inactive": "Ngưng hoạt động",
         "status:disposed": "Đã thanh lý",
+        "status:no_label": "Chưa dán tem",
     }
     
     idx = context.user_data["field_index"]
@@ -993,6 +1031,45 @@ async def handle_edit_keep_callback(update: Update, context: ContextTypes.DEFAUL
     return await _ask_next_field(context, query.message.chat_id)
 
 
+async def handle_edit_skip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """⏭️ Bỏ qua handler: keep value in /f, blank (or CHƯA CÓ MÃ) in /n."""
+    query = update.callback_query
+    await query.answer()
+
+    idx = context.user_data["field_index"]
+    kv  = context.user_data["kv"]
+    label, key = FIELDS[idx]
+
+    is_manual = context.user_data.get("is_manual_add", False)
+
+    if is_manual:
+        # Manual-add flow: Mã MMTB → CHƯA CÓ MÃ; other fields → blank
+        if key == "Mã MMTB":
+            kv[key] = "CHƯA CÓ MÃ"
+            await query.edit_message_text(
+                text=f"⏭️ Bỏ qua *{label}* → sẽ lưu là `CHƯA CÓ MÃ`",
+                parse_mode="Markdown",
+            )
+        else:
+            kv[key] = ""
+            await query.edit_message_text(
+                text=f"⏭️ Đã bỏ qua *{label}*",
+                parse_mode="Markdown",
+            )
+        context.user_data["kv"] = kv
+    else:
+        # /f re-edit flow: skip = keep existing value unchanged
+        current = _get_kv(kv, key)
+        await query.edit_message_text(
+            text=f"⏭️ Bỏ qua — giữ nguyên *{label}*: `{current}`",
+            parse_mode="Markdown",
+        )
+
+    # Advance to next field
+    context.user_data["field_index"] = idx + 1
+    return await _ask_next_field(context, query.message.chat_id)
+
+
 # ─────────────────────────────────────────────
 # Helper: show corrected summary + save / edit-again buttons
 # ─────────────────────────────────────────────
@@ -1007,9 +1084,14 @@ async def _show_correction_summary(context: ContextTypes.DEFAULT_TYPE, chat_id: 
     )
 
     # Route save/edit buttons to the correct callback prefix depending on flow
-    is_find_edit = context.user_data.get("is_find_edit", False)
-    save_cb = CB_FIND_SAVE       if is_find_edit else CB_SAVE_CONFIRM
-    edit_cb = CB_FIND_EDIT_AGAIN if is_find_edit else CB_SAVE_EDIT
+    is_find_edit  = context.user_data.get("is_find_edit", False)
+    is_manual_add = context.user_data.get("is_manual_add", False)
+    if is_find_edit:
+        save_cb, edit_cb = CB_FIND_SAVE, CB_FIND_EDIT_AGAIN
+    elif is_manual_add:
+        save_cb, edit_cb = CB_MANUAL_SAVE, CB_MANUAL_EDIT
+    else:
+        save_cb, edit_cb = CB_SAVE_CONFIRM, CB_SAVE_EDIT
 
     save_kb = [[
         InlineKeyboardButton("💾 Xác nhận & Lưu", callback_data=save_cb),
@@ -1077,6 +1159,105 @@ async def handle_save_confirmation(update: Update, context: ContextTypes.DEFAULT
             text="✅ <b>Dữ liệu đã sửa được lưu thành công vào Google Sheets!</b>\n\n"
                  "💡 <b>Nhắc nhở:</b> Đừng quên kiểm tra và cập nhật vị trí mặc định của bạn bằng lệnh <code>/l [vị_trí]</code> (nếu cần thiết) khi đổi khu vực nhé!\n\n"
                  "Gửi ảnh mới để tiếp tục.",
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logging.exception(e)
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=f"⚠️ Lưu vào Google Sheets thất bại:\n`{str(e)}`",
+            parse_mode="Markdown",
+        )
+
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+# ═════════════════════════════════════════════
+# /n command — manual equipment add flow
+# ═════════════════════════════════════════════
+async def new_manual_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Entry point for /n. Starts a manual field-by-field equipment add flow."""
+    user_id = update.effective_user.id
+    load_user_config(user_id, context)
+
+    # Pre-fill kv with the user's saved workshop and location as defaults
+    kv: dict = {}
+    ws  = context.user_data.get("workshop") or get_user_workshop(user_id)
+    pos = context.user_data.get("current_position") or get_user_location(user_id)
+    if ws:
+        kv["Xưởng"] = ws
+    if pos:
+        kv["Vị trí"] = pos
+
+    context.user_data["kv"]              = kv
+    context.user_data["markdown_text"]   = ""
+    context.user_data["engine_name"]     = "Nhập tay"
+    context.user_data["processing_time"] = "—"
+    context.user_data["field_index"]     = 0
+    context.user_data["is_manual_add"]   = True
+
+    await update.message.reply_text(
+        "✍️ <b>Thêm thiết bị thủ công</b>\n\n"
+        "Nhập thông tin cho từng trường. Bấm <b>↩️ Giữ nguyên</b> để giữ giá trị hiện tại, "
+        "hoặc <b>⏭️ Bỏ qua</b> để bỏ qua trường đó.\n\n"
+        "💡 Nếu bỏ qua <b>Mã MMTB</b>, hệ thống sẽ ghi <code>CHƯA CÓ MÃ</code>.",
+        parse_mode="HTML",
+    )
+    return await _ask_next_field(context, update.message.chat_id)
+
+
+# ─────────────────────────────────────────────
+# /n flow — final save confirmation
+# ─────────────────────────────────────────────
+async def handle_manual_save_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == CB_MANUAL_EDIT:
+        # Restart field loop from the beginning
+        context.user_data["field_index"] = 0
+        await query.edit_message_text(
+            "🔁 *Sửa lại từ đầu...*\n\nGửi `-` nếu muốn giữ nguyên.",
+            parse_mode="Markdown",
+        )
+        return await _ask_next_field(context, query.message.chat_id)
+
+    # ── CB_MANUAL_SAVE: append new row to Google Sheets ──
+    if context.user_data.get("sheets_saved"):
+        await query.edit_message_text(
+            "✅ Dữ liệu đã được lưu rồi. Gửi ảnh hoặc dùng /n để tiếp tục."
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    await query.edit_message_text(
+        "💾 *Đang lưu dữ liệu vào Google Sheets...*",
+        parse_mode="Markdown",
+    )
+    logging.info("[BOT] Saving to Google Sheets triggered from TELEGRAM_MANUAL step")
+
+    try:
+        kv = context.user_data["kv"]
+        ocr_result = OCRResult(
+            markdown=context.user_data.get("markdown_text", ""),
+            key_value=kv,
+        )
+        await asyncio.to_thread(
+            append_results_to_sheet_sync, [ocr_result], "TELEGRAM_MANUAL"
+        )
+        context.user_data["sheets_saved"] = True
+
+        user_id = query.from_user.id
+        current_pos = context.user_data.get("current_position") or get_user_location(user_id)
+        reply_markup = get_position_adjustment_keyboard(current_pos) if current_pos else None
+
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="✅ <b>Đã thêm thiết bị mới vào Google Sheets!</b>\n\n"
+                 "💡 <b>Nhắc nhở:</b> Đừng quên kiểm tra và cập nhật vị trí mặc định của bạn bằng lệnh <code>/l [vị_trí]</code> (nếu cần thiết) khi đổi khu vực nhé!\n\n"
+                 "Gửi ảnh hoặc dùng /n để thêm thiết bị tiếp theo.",
             reply_markup=reply_markup,
             parse_mode="HTML",
         )
@@ -1332,6 +1513,7 @@ conv_handler = ConversationHandler(
     entry_points=[
         MessageHandler(filters.PHOTO, handle_photo),
         CommandHandler("f", find_mmtb_cmd),      # /f <mã> — find & edit flow
+        CommandHandler("n", new_manual_cmd),      # /n — manual add flow
     ],
     states={
         SELECT_ENGINE: [
@@ -1345,12 +1527,14 @@ conv_handler = ConversationHandler(
         ],
         EDIT_FIELD: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_field_input),
-            CallbackQueryHandler(handle_status_callback, pattern="^status:"),
+            CallbackQueryHandler(handle_status_callback,    pattern="^status:"),
             CallbackQueryHandler(handle_edit_keep_callback, pattern="^edit:keep"),
+            CallbackQueryHandler(handle_edit_skip_callback, pattern="^edit:skip"),
         ],
         CONFIRM_SAVE: [
-            CallbackQueryHandler(handle_save_confirmation,      pattern="^save:"),
-            CallbackQueryHandler(handle_find_save_confirmation, pattern="^find_save:"),
+            CallbackQueryHandler(handle_save_confirmation,        pattern="^save:"),
+            CallbackQueryHandler(handle_find_save_confirmation,   pattern="^find_save:"),
+            CallbackQueryHandler(handle_manual_save_confirmation, pattern="^manual_save:"),
         ],
         # ── /f find-and-edit states ───────────────────────────────────────
         FIND_ASK_EDIT: [

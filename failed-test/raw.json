@@ -46,5 +46,24 @@
       "Vị trí": "TỔ HÀN LINE 1 (A20-21)",
       "<table border=1 style='margin": "auto; word-wrap: break-word;'><tr><td style='text-align: center; word-wrap: break-word;'></td><td style='text-align: center; word-wrap: break-word;'>TPM - F ĐỔ</td><td style='text-align: center; word-wrap: break-word;'>THỂ ĐỔ</td></tr><tr><td style='text-align: center; word-wrap: break-word;'>TPM - AM</td><td style='text-align: center; word-wrap: break-word;'>TPM - AM</td><td style='text-align: center; word-wrap: break-word;'>Số thê</td></tr><tr><td style='text-align: center; word-wrap: break-word;'>Tên mấy/thiết bị</td><td style='text-align: center; word-wrap: break-word;'>1 | 2 | 3 | 4 | 5 | 6 | 7</td><td style='text-align: center; word-wrap: break-word;'>Phòng ban</td></tr><tr><td style='text-align: center; word-wrap: break-word;'>Số thê</td><td style='text-align: center; word-wrap: break-word;'>Vì tri phát biến lũi</td><td style='text-align: center; word-wrap: break-word;'>Tên gọi</td></tr><tr><td style='text-align: center; word-wrap: break-word;'></td><td colspan=\"2\">SẢ là</td></tr></table>"
     }
+  },
+  {
+    "markdown": "## DAIDUNG\n\nMẠY HÀN QUE - HK 500D, HÒNG KÝ\n\n- Mã: B22400193\n\n- Model: HK 500D\n\n- Xuất xử: Việt Nam\n\n## TỔ QUẬN\n\nTỔ RẠI",
+    "key_value": {
+      "machine_name": "DAIDUNG",
+      "- Mã": "B22400193",
+      "Model": "HK 500D",
+      "- Xuất xử": "Việt Nam"
+    }
+  },
+  {
+    "markdown": "DRIDUNG\n\nMáy hàn AOTAI ASAW\n\n1250ACDC\n\nMã MMTB: B22401852\n\nModel: ASAW 1250ACDC\n\nXuất xứ : Trung Quốc\n\nVí Trí : AH2",
+    "key_value": {
+      "machine_name": "DRIDUNG",
+      "Mã MMTB": "B22401852",
+      "Model": "ASAW 1250ACDC",
+      "Xuất xứ": "Trung Quốc",
+      "Vị trí": "AH2"
+    }
   }
 ]

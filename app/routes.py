@@ -115,7 +115,7 @@ async def parse_text(
     return OCRResponse(results=results, processing_time=processing_time)
 
 
-async def process_single_gemini(file: UploadFile) -> OCRResult:
+async def process_single_gemini(file: UploadFile, model_index: int = 1) -> OCRResult:
     """Asynchronous worker to process a single image with PIL validation and Gemini OCR."""
     # 1. Read file bytes in-memory
     try:
@@ -136,7 +136,7 @@ async def process_single_gemini(file: UploadFile) -> OCRResult:
 
     # 4. Call Gemini OCR (offloaded to threadpool)
     try:
-        response = await asyncio.to_thread(call_gemini_ocr, image)
+        response = await asyncio.to_thread(call_gemini_ocr, image, model_index)
     except APIError as api_err:
         logger.error(f"Gemini APIError (code={api_err.code}) for '{file.filename}': {api_err.message}")
         if api_err.code == 429 or api_err.status == "RESOURCE_EXHAUSTED":
@@ -188,6 +188,7 @@ async def process_single_gemini(file: UploadFile) -> OCRResult:
 )
 async def parse_text_gemini(
     files: List[UploadFile] = File(...),
+    model_index: int = 1
 ):
     """Accepts multiple image uploads (PNG, JPG, JPEG, WEBP, GIF), processes them in memory
     concurrently, performs OCR via Gemini 2.5 Flash-Lite, and returns structured markdown and key-value extractions.
@@ -202,7 +203,7 @@ async def parse_text_gemini(
         )
 
     # Run processing tasks concurrently using asyncio.gather
-    tasks = [process_single_gemini(f) for f in files]
+    tasks = [process_single_gemini(f, model_index) for f in files]
     results = await asyncio.gather(*tasks)
 
     processing_time = round(time.time() - start_time, 3)
