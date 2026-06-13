@@ -24,6 +24,7 @@ from app.config.factory_structure import FACTORY_STRUCTURE
 import unicodedata
 import re
 import html
+from app.utils.validators import validate_mmtb
 
 
 
@@ -63,8 +64,8 @@ GEMINI_ENDPOINT = f"{API_BASE_URL}/parse-text-gemini"
 # ─────────────────────────────────────────────
 # Conversation States
 # ─────────────────────────────────────────────
-SELECT_ENGINE, SELECT_STATUS, CONFIRM_RESULT, EDIT_FIELD, CONFIRM_SAVE, FIND_ASK_EDIT = range(6)
-CFG_SELECT_FACTORY, CFG_SELECT_WORKSHOP, CFG_SELECT_LETTER, CFG_SELECT_NUMBER = range(6, 10)
+SELECT_ENGINE, SELECT_STATUS, CONFIRM_RESULT, EDIT_FIELD, CONFIRM_SAVE, FIND_ASK_EDIT, MMTB_WARN = range(7)
+CFG_SELECT_FACTORY, CFG_SELECT_WORKSHOP, CFG_SELECT_LETTER, CFG_SELECT_NUMBER = range(7, 11)
 
 # Callback data constants
 CB_PADDLE          = "engine:paddle"
@@ -85,6 +86,9 @@ CB_FIND_EDIT_AGAIN = "find_save:edit_again"
 CB_MANUAL_SAVE     = "manual_save:confirm"
 CB_MANUAL_EDIT     = "manual_save:edit_again"
 CB_SKIP_FIELD      = "edit:skip"
+# OCR validation warning flow
+CB_MMTB_FORCE_SAVE = "mmtb_warn:force_save"
+CB_MMTB_EDIT       = "mmtb_warn:edit"
 
 # Fields to loop through during correction: (display label, key_value dict key)
 FIELDS = [
@@ -825,6 +829,134 @@ async def handle_status_choice(update: Update, context: ContextTypes.DEFAULT_TYP
     return CONFIRM_RESULT
 
 
+# ─────────────────────────────────────────────
+# OCR validation & Save helpers
+# ─────────────────────────────────────────────
+async def _save_ocr_data(query, context, source: str):
+    # Guard: prevent double-save if handler is somehow re-entered
+    if context.user_data.get("sheets_saved"):
+        await query.edit_message_text(
+            "✅ Dữ liệu đã được lưu rồi. Gửi ảnh mới để tiếp tục."
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
+
+    await query.edit_message_text(
+        "💾 *Đang lưu dữ liệu vào Google Sheets...*",
+        parse_mode="Markdown",
+    )
+    logging.info(f"[BOT] Saving to Google Sheets triggered from {source}")
+    try:
+        kv         = context.user_data["kv"]
+        ocr_result = OCRResult(
+            markdown=context.user_data.get("markdown_text", ""),
+            key_value=kv,
+        )
+        await asyncio.to_thread(
+            append_results_to_sheet_sync, [ocr_result], source
+        )
+        context.user_data["sheets_saved"] = True
+        
+        user_id = query.from_user.id
+        current_pos = context.user_data.get("current_position") or get_user_location(user_id)
+        reply_markup = get_position_adjustment_keyboard(current_pos) if current_pos else None
+
+        msg_text = (
+            "✅ <b>Thông tin đã xác nhận và lưu vào Google Sheets!</b>\n\n"
+            if source == "TELEGRAM_CONFIRM" else
+            "✅ <b>Dữ liệu đã sửa được lưu thành công vào Google Sheets!</b>\n\n"
+        )
+        msg_text += (
+            "💡 <b>Nhắc nhở:</b> Đừng quên kiểm tra và cập nhật vị trí mặc định của bạn bằng lệnh <code>/l [vị_trí]</code> (nếu cần thiết) khi đổi khu vực nhé!\n\n"
+            "Gửi ảnh mới để tiếp tục."
+        )
+
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=msg_text,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logging.exception(e)
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=f"⚠️ Lưu vào Google Sheets thất bại:\n`{str(e)}`",
+            parse_mode="Markdown",
+        )
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+async def _do_mmtb_validation_check(query, context, source: str) -> Optional[int]:
+    """
+    Checks if Mã MMTB is valid.
+    If not valid, edits message to show warning and returns MMTB_WARN.
+    Otherwise returns None.
+    """
+    kv = context.user_data.get("kv", {})
+    mmtb = _get_kv(kv, "Mã MMTB").strip()
+    
+    if validate_mmtb(mmtb):
+        return None
+        
+    user_id = query.from_user.id
+    logging.warning(
+        f"[MMTB_VALIDATION] Invalid code '{mmtb}' — source={source} user_id={user_id}"
+    )
+    
+    context.user_data["mmtb_warn_source"] = source
+    
+    warning_text = (
+        f"⚠️ <b>Mã MMTB có thể không hợp lệ:</b>\n\n"
+        f"Giá trị hiện tại: <code>{html.escape(mmtb) if mmtb else '(Trống)'}</code>\n"
+        f"Định dạng mong đợi: <code>B########</code> (Ví dụ: <code>B22400711</code>)\n\n"
+        f"Bạn muốn làm gì?"
+    )
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("✏️ Sửa mã MMTB", callback_data=CB_MMTB_EDIT),
+            InlineKeyboardButton("⏭️ Vẫn lưu", callback_data=CB_MMTB_FORCE_SAVE),
+        ]
+    ]
+    
+    await query.edit_message_text(
+        text=warning_text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="HTML",
+    )
+    return MMTB_WARN
+
+
+async def handle_mmtb_warn_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    source = context.user_data.get("mmtb_warn_source", "TELEGRAM_CONFIRM")
+    
+    if data == CB_MMTB_FORCE_SAVE:
+        user_id = query.from_user.id
+        kv = context.user_data.get("kv", {})
+        mmtb = _get_kv(kv, "Mã MMTB")
+        logging.warning(
+            f"[MMTB_VALIDATION] User force-saved invalid code '{mmtb}' — source={source} user_id={user_id}"
+        )
+        return await _save_ocr_data(query, context, source)
+        
+    elif data == CB_MMTB_EDIT:
+        context.user_data["field_index"] = 1
+        context.user_data["mmtb_single_edit"] = True
+        
+        await query.edit_message_text(
+            "✏️ *Sửa mã MMTB...*\n\n"
+            "Nhập giá trị mới hoặc chọn:",
+            parse_mode="Markdown",
+        )
+        return await _ask_next_field(context, query.message.chat_id)
+
+
 # ═════════════════════════════════════════════
 # STEP 3 — Confirmation response
 # ═════════════════════════════════════════════
@@ -833,52 +965,12 @@ async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE
     await query.answer()
 
     if query.data == CB_CONFIRM_YES:
-        # Guard: prevent double-save if handler is somehow re-entered
-        if context.user_data.get("sheets_saved"):
-            await query.edit_message_text(
-                "✅ Dữ liệu đã được lưu rồi. Gửi ảnh mới để tiếp tục."
-            )
-            context.user_data.clear()
-            return ConversationHandler.END
+        # Check validation
+        warn_state = await _do_mmtb_validation_check(query, context, "TELEGRAM_CONFIRM")
+        if warn_state is not None:
+            return warn_state
 
-        # Save to Google Sheets — triggered ONLY by explicit user confirmation
-        await query.edit_message_text(
-            "💾 *Đang lưu dữ liệu vào Google Sheets...*",
-            parse_mode="Markdown",
-        )
-        logging.info("[BOT] Saving to Google Sheets triggered from TELEGRAM_CONFIRM step")
-        try:
-            kv         = context.user_data["kv"]
-            ocr_result = OCRResult(
-                markdown=context.user_data.get("markdown_text", ""),
-                key_value=kv,
-            )
-            await asyncio.to_thread(
-                append_results_to_sheet_sync, [ocr_result], "TELEGRAM_CONFIRM"
-            )
-            context.user_data["sheets_saved"] = True
-            
-            user_id = query.from_user.id
-            current_pos = context.user_data.get("current_position") or get_user_location(user_id)
-            reply_markup = get_position_adjustment_keyboard(current_pos) if current_pos else None
-
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text="✅ <b>Thông tin đã xác nhận và lưu vào Google Sheets!</b>\n\n"
-                     "💡 <b>Nhắc nhở:</b> Đừng quên kiểm tra và cập nhật vị trí mặc định của bạn bằng lệnh <code>/l [vị_trí]</code> (nếu cần thiết) khi đổi khu vực nhé!\n\n"
-                     "Gửi ảnh mới để tiếp tục.",
-                reply_markup=reply_markup,
-                parse_mode="HTML",
-            )
-        except Exception as e:
-            logging.exception(e)
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text=f"⚠️ Lưu vào Google Sheets thất bại:\n`{str(e)}`",
-                parse_mode="Markdown",
-            )
-        context.user_data.clear()
-        return ConversationHandler.END
+        return await _save_ocr_data(query, context, "TELEGRAM_CONFIRM")
 
     # ── CB_CONFIRM_EDIT: start field-by-field correction ──
     await query.edit_message_text(
@@ -957,6 +1049,24 @@ async def handle_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
     kv         = context.user_data["kv"]
     label, key = FIELDS[idx]
 
+    # Flow 1: manual-add Validation Guard
+    if key == "Mã MMTB" and context.user_data.get("is_manual_add"):
+        target_val = _get_kv(kv, key) if user_input == "-" else user_input
+        if not validate_mmtb(target_val):
+            logging.warning(
+                f"[MMTB_VALIDATION] Invalid code '{target_val}' — source=manual_add user_id={update.effective_user.id}"
+            )
+            keyboard = [[InlineKeyboardButton("⏭️ Bỏ qua", callback_data="edit:skip")]]
+            await update.message.reply_text(
+                "❌ <b>Mã MMTB không hợp lệ.</b>\n\n"
+                "Định dạng hợp lệ: <code>B########</code> (chữ B in hoa theo sau bởi đúng 8 chữ số)\n"
+                "Ví dụ: <code>B22400711</code>\n\n"
+                "Vui lòng nhập lại hoặc chọn:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML",
+            )
+            return EDIT_FIELD
+
     if user_input == "-":
         current = _get_kv(kv, key)
         await update.message.reply_text(
@@ -970,6 +1080,10 @@ async def handle_field_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"✔️ Đã cập nhật *{label}*: `{user_input}`",
             parse_mode="Markdown",
         )
+
+    if context.user_data.get("mmtb_single_edit"):
+        context.user_data.pop("mmtb_single_edit", None)
+        return await _show_correction_summary(context, update.message.chat_id)
 
     # Advance to next field
     context.user_data["field_index"] = idx + 1
@@ -1021,10 +1135,32 @@ async def handle_edit_keep_callback(update: Update, context: ContextTypes.DEFAUL
     label, key = FIELDS[idx]
 
     current = _get_kv(kv, key)
+
+    # Flow 1: manual-add Validation Guard
+    if key == "Mã MMTB" and context.user_data.get("is_manual_add"):
+        if not validate_mmtb(current):
+            logging.warning(
+                f"[MMTB_VALIDATION] Invalid code '{current}' kept in manual_add — user_id={query.from_user.id}"
+            )
+            keyboard = [[InlineKeyboardButton("⏭️ Bỏ qua", callback_data="edit:skip")]]
+            await query.edit_message_text(
+                text="❌ <b>Mã MMTB không hợp lệ.</b>\n\n"
+                     "Định dạng hợp lệ: <code>B########</code> (chữ B in hoa theo sau bởi đúng 8 chữ số)\n"
+                     "Ví dụ: <code>B22400711</code>\n\n"
+                     "Vui lòng nhập lại hoặc chọn:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="HTML",
+            )
+            return EDIT_FIELD
+
     await query.edit_message_text(
         text=f"↩️ Giữ nguyên *{label}*: `{current}`",
         parse_mode="Markdown",
     )
+
+    if context.user_data.get("mmtb_single_edit"):
+        context.user_data.pop("mmtb_single_edit", None)
+        return await _show_correction_summary(context, query.message.chat_id)
 
     # Advance to next field
     context.user_data["field_index"] = idx + 1
@@ -1058,12 +1194,16 @@ async def handle_edit_skip_callback(update: Update, context: ContextTypes.DEFAUL
             )
         context.user_data["kv"] = kv
     else:
-        # /f re-edit flow: skip = keep existing value unchanged
+        # /f re-edit flow or warning re-edit flow: skip = keep existing value unchanged
         current = _get_kv(kv, key)
         await query.edit_message_text(
             text=f"⏭️ Bỏ qua — giữ nguyên *{label}*: `{current}`",
             parse_mode="Markdown",
         )
+
+    if context.user_data.get("mmtb_single_edit"):
+        context.user_data.pop("mmtb_single_edit", None)
+        return await _show_correction_summary(context, query.message.chat_id)
 
     # Advance to next field
     context.user_data["field_index"] = idx + 1
@@ -1123,55 +1263,13 @@ async def handle_save_confirmation(update: Update, context: ContextTypes.DEFAULT
         )
         return await _ask_next_field(context, query.message.chat_id)
 
-    # ── CB_SAVE_CONFIRM: append corrected row to Google Sheets ──
-    # Guard: prevent double-save if handler is somehow re-entered
-    if context.user_data.get("sheets_saved"):
-        await query.edit_message_text(
-            "✅ Dữ liệu đã được lưu rồi. Gửi ảnh mới để tiếp tục."
-        )
-        context.user_data.clear()
-        return ConversationHandler.END
+    if query.data == CB_SAVE_CONFIRM:
+        # Check validation
+        warn_state = await _do_mmtb_validation_check(query, context, "TELEGRAM_CORRECTED_CONFIRM")
+        if warn_state is not None:
+            return warn_state
 
-    await query.edit_message_text(
-        "💾 *Đang lưu dữ liệu đã sửa vào Google Sheets...*",
-        parse_mode="Markdown",
-    )
-    logging.info("[BOT] Saving to Google Sheets triggered from TELEGRAM_CORRECTED_CONFIRM step")
-
-    try:
-        kv         = context.user_data["kv"]
-        ocr_result = OCRResult(
-            markdown=context.user_data.get("markdown_text", ""),
-            key_value=kv,
-        )
-        # Run the synchronous gspread call in a thread to not block the event loop
-        await asyncio.to_thread(
-            append_results_to_sheet_sync, [ocr_result], "TELEGRAM_CORRECTED_CONFIRM"
-        )
-        context.user_data["sheets_saved"] = True
-        
-        user_id = query.from_user.id
-        current_pos = context.user_data.get("current_position") or get_user_location(user_id)
-        reply_markup = get_position_adjustment_keyboard(current_pos) if current_pos else None
-
-        await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text="✅ <b>Dữ liệu đã sửa được lưu thành công vào Google Sheets!</b>\n\n"
-                 "💡 <b>Nhắc nhở:</b> Đừng quên kiểm tra và cập nhật vị trí mặc định của bạn bằng lệnh <code>/l [vị_trí]</code> (nếu cần thiết) khi đổi khu vực nhé!\n\n"
-                 "Gửi ảnh mới để tiếp tục.",
-            reply_markup=reply_markup,
-            parse_mode="HTML",
-        )
-    except Exception as e:
-        logging.exception(e)
-        await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text=f"⚠️ Lưu vào Google Sheets thất bại:\n`{str(e)}`",
-            parse_mode="Markdown",
-        )
-
-    context.user_data.clear()
-    return ConversationHandler.END
+        return await _save_ocr_data(query, context, "TELEGRAM_CORRECTED_CONFIRM")
 
 
 # ═════════════════════════════════════════════
@@ -1539,6 +1637,9 @@ conv_handler = ConversationHandler(
         # ── /f find-and-edit states ───────────────────────────────────────
         FIND_ASK_EDIT: [
             CallbackQueryHandler(handle_find_edit_choice, pattern="^find:"),
+        ],
+        MMTB_WARN: [
+            CallbackQueryHandler(handle_mmtb_warn_callback, pattern=f"^({CB_MMTB_FORCE_SAVE}|{CB_MMTB_EDIT})$"),
         ],
     },
     fallbacks=[
