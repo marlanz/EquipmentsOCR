@@ -30,6 +30,10 @@ from app.config import (
     GEMINI_MODEL_2,
     GEMINI_API_KEY_3,
     GEMINI_MODEL_3,
+    GEMINI_API_KEY_4,
+    GEMINI_MODEL_4,
+    GEMINI_API_KEY_5,
+    GEMINI_MODEL_5,
     GOOGLE_SHEETS_CREDENTIALS_JSON,
     GOOGLE_SHEETS_CREDENTIALS_PATH,
     GOOGLE_SHEETS_NAME,
@@ -71,6 +75,20 @@ if GEMINI_API_KEY_3:
     client3 = genai.Client(api_key=GEMINI_API_KEY_3)
 else:
     logger.warning("GEMINI_API_KEY_3 not configured. Client 3 will be initialized as None.")
+
+client4: Optional[genai.Client] = None
+if GEMINI_API_KEY_4:
+    logger.info(f"Initializing Google GenAI client 4 for model {GEMINI_MODEL_4}...")
+    client4 = genai.Client(api_key=GEMINI_API_KEY_4)
+else:
+    logger.warning("GEMINI_API_KEY_4 not configured. Client 4 will be initialized as None.")
+
+client5: Optional[genai.Client] = None
+if GEMINI_API_KEY_5:
+    logger.info(f"Initializing Google GenAI client 5 for model {GEMINI_MODEL_5}...")
+    client5 = genai.Client(api_key=GEMINI_API_KEY_5)
+else:
+    logger.warning("GEMINI_API_KEY_5 not configured. Client 5 will be initialized as None.")
 
 
 class EquipmentOCRResult(BaseModel):
@@ -436,6 +454,12 @@ def call_gemini_ocr(image: Image.Image, model_index: int = 1) -> genai.types.Gen
     elif model_index == 3:
         selected_client = client3
         selected_model = GEMINI_MODEL_3
+    elif model_index == 4:
+        selected_client = client4
+        selected_model = GEMINI_MODEL_4
+    elif model_index == 5:
+        selected_client = client5
+        selected_model = GEMINI_MODEL_5
 
     if not selected_client:
         logger.error(f"Attempted to call Gemini OCR but client {model_index} is not initialized.")
@@ -468,6 +492,10 @@ async def check_gemini_connectivity() -> bool:
         active_clients.append(client2)
     if client3:
         active_clients.append(client3)
+    if client4:
+        active_clients.append(client4)
+    if client5:
+        active_clients.append(client5)
 
     if not active_clients:
         return False

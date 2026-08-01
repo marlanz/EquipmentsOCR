@@ -46,6 +46,8 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite").strip()
 GEMINI_MODEL_2 = os.getenv("GEMINI_MODEL_2", "gemini-2.5-flash").strip()
 GEMINI_MODEL_3 = os.getenv("GEMINI_MODEL_3", "gemini-2.5-pro").strip()
+GEMINI_MODEL_4 = os.getenv("GEMINI_MODEL_4", "gemini-2.5-pro").strip()
+GEMINI_MODEL_5 = os.getenv("GEMINI_MODEL_5", "gemini-2.5-pro").strip()
 
 # Build API base URL.
 # Priority: API_BASE_URL > OCR_API_URL (legacy, path stripped automatically)
@@ -73,6 +75,8 @@ CB_GEMINI          = "engine:gemini"
 CB_GEMINI_1        = "engine:gemini1"
 CB_GEMINI_2        = "engine:gemini2"
 CB_GEMINI_3        = "engine:gemini3"
+CB_GEMINI_4        = "engine:gemini4"
+CB_GEMINI_5        = "engine:gemini5"
 CB_CONFIRM_YES     = "confirm:yes"
 CB_CONFIRM_EDIT    = "confirm:edit"
 CB_SAVE_CONFIRM    = "save:confirm"
@@ -614,6 +618,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(f"✨ Gemini {GEMINI_MODEL}", callback_data=CB_GEMINI_1)],
         [InlineKeyboardButton(f"✨ Gemini {GEMINI_MODEL_2}", callback_data=CB_GEMINI_2)],
         [InlineKeyboardButton(f"✨ Gemini {GEMINI_MODEL_3}", callback_data=CB_GEMINI_3)],
+        [InlineKeyboardButton(f"✨ Gemini {GEMINI_MODEL_4}", callback_data=CB_GEMINI_4)]
+        [InlineKeyboardButton(f"✨ Gemini {GEMINI_MODEL_5}", callback_data=CB_GEMINI_5)]
     ]
     await update.message.reply_text(
         "🖼️ Ảnh đã nhận! Chọn engine OCR để xử lý:",
@@ -643,6 +649,12 @@ async def handle_engine_choice(update: Update, context: ContextTypes.DEFAULT_TYP
         elif engine == CB_GEMINI_3:
             model_index = 3
             model_name = GEMINI_MODEL_3
+        elif engine == CB_GEMINI_4:
+            model_index = 4
+            model_name = GEMINI_MODEL_4
+        elif engine == CB_GEMINI_5:
+            model_index = 5
+            model_name = GEMINI_MODEL_5
         engine_name = f"Gemini {model_name}"
         endpoint    = f"{GEMINI_ENDPOINT}?model_index={model_index}"
 

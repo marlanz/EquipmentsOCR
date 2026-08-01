@@ -20,3 +20,5 @@ ENV/
 
 credentials.json
 workshops.json
+
+images/

@@ -19,12 +19,22 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite").strip()
 GEMINI_API_KEY_2 = os.getenv("GEMINI_API_KEY_2", "").strip()
 if GEMINI_API_KEY_2.startswith("your_gemini_api_key"):
     GEMINI_API_KEY_2 = ""
-GEMINI_MODEL_2 = os.getenv("GEMINI_MODEL_2", "gemini-2.5-flash").strip()
+GEMINI_MODEL_2 = os.getenv("GEMINI_MODEL_2", "gemini-2.5-flash-lite").strip()
 
 GEMINI_API_KEY_3 = os.getenv("GEMINI_API_KEY_3", "").strip()
 if GEMINI_API_KEY_3.startswith("your_gemini_api_key"):
     GEMINI_API_KEY_3 = ""
 GEMINI_MODEL_3 = os.getenv("GEMINI_MODEL_3", "gemini-2.5-pro").strip()
+
+GEMINI_API_KEY_4 = os.getenv("GEMINI_API_KEY_4", "").strip()
+if GEMINI_API_KEY_4.startswith("your_gemini_api_key"):
+    GEMINI_API_KEY_4 = ""
+GEMINI_MODEL_4 = os.getenv("GEMINI_MODEL_4", "gemini-2.5-pro").strip()
+
+GEMINI_API_KEY_5 = os.getenv("GEMINI_API_KEY_5", "").strip()
+if GEMINI_API_KEY_5.startswith("your_gemini_api_key"):
+    GEMINI_API_KEY_5 = ""
+GEMINI_MODEL_5 = os.getenv("GEMINI_MODEL_5", "gemini-2.5-pro").strip()
 
 # Google Sheets configurations
 GOOGLE_SHEETS_CREDENTIALS_JSON = os.getenv("GOOGLE_SHEETS_CREDENTIALS_JSON", "").strip()
@@ -42,7 +52,7 @@ GOOGLE_SHEETS_DEDUP_ENABLED = os.getenv("GOOGLE_SHEETS_DEDUP_ENABLED", "true").s
 PORT = int(os.getenv("PORT", "8000"))
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "5"))
 MAX_WAIT_SECONDS = int(os.getenv("MAX_WAIT_SECONDS", "300"))
-PADDLE_MODEL = os.getenv("MODEL", "PaddleOCR-VL-1.5").strip()
+PADDLE_MODEL = os.getenv("MODEL", "PaddleOCR-VL-1.6").strip()
 
 # Configure logging
 logging.basicConfig(
@@ -60,8 +70,10 @@ def validate_config():
     has_gemini = bool(GEMINI_API_KEY)
     has_gemini_2 = bool(GEMINI_API_KEY_2)
     has_gemini_3 = bool(GEMINI_API_KEY_3)
+    has_gemini_4 = bool(GEMINI_API_KEY_4)
+    has_gemini_5 = bool(GEMINI_API_KEY_5)
     
-    if not has_paddle and not has_gemini and not has_gemini_2 and not has_gemini_3:
+    if not has_paddle and not has_gemini and not has_gemini_2 and not has_gemini_3 and not has_gemini_4 and not has_gemini_5:
         error_msg = (
             "Configuration validation failed. "
             "At least one OCR engine must be configured. "
@@ -90,6 +102,14 @@ def validate_config():
         logger.info(f"Gemini OCR Engine 3: active. Model: {GEMINI_MODEL_3}")
     else:
         logger.warning("Gemini OCR Engine 3: inactive (GEMINI_API_KEY_3 not configured)")
+    if has_gemini_4:
+        logger.info(f"Gemini OCR Engine 4: active. Model: {GEMINI_MODEL_4}")
+    else:
+        logger.warning("Gemini OCR Engine 4: inactive (GEMINI_API_KEY_4 not configured)")
+    if has_gemini_5:
+        logger.info(f"Gemini OCR Engine 5: active. Model: {GEMINI_MODEL_5}")
+    else:
+        logger.warning("Gemini OCR Engine 5: inactive (GEMINI_API_KEY_5 not configured)")
 
     if GOOGLE_SHEETS_ENABLED:
         source = "Environment variable (JSON)" if GOOGLE_SHEETS_CREDENTIALS_JSON else f"File ({GOOGLE_SHEETS_CREDENTIALS_PATH})"
