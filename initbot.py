@@ -618,7 +618,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(f"✨ Gemini {GEMINI_MODEL}", callback_data=CB_GEMINI_1)],
         [InlineKeyboardButton(f"✨ Gemini {GEMINI_MODEL_2}", callback_data=CB_GEMINI_2)],
         [InlineKeyboardButton(f"✨ Gemini {GEMINI_MODEL_3}", callback_data=CB_GEMINI_3)],
-        [InlineKeyboardButton(f"✨ Gemini {GEMINI_MODEL_4}", callback_data=CB_GEMINI_4)]
+        [InlineKeyboardButton(f"✨ Gemini {GEMINI_MODEL_4}", callback_data=CB_GEMINI_4)],
         [InlineKeyboardButton(f"✨ Gemini {GEMINI_MODEL_5}", callback_data=CB_GEMINI_5)]
     ]
     await update.message.reply_text(

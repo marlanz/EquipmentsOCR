@@ -7,10 +7,10 @@ import sys
 import time
 
 JOB_URL = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
-TOKEN = "5636462f7bb06ea0c5dc641010791f5c912f220e"
+TOKEN = "94370032f757082a151e8e3e68929f54b0ba7116"
 MODEL = "PaddleOCR-VL-1.6"
 
-file_path = "/images/img1.jpg"
+file_path = "img1.jpg"
 
 headers = {
     "Authorization": f"bearer {TOKEN}",
