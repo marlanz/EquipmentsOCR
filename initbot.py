@@ -18,8 +18,12 @@ from telegram.ext import (
     filters,
 )
 
-from app.helpers import append_results_to_sheet_sync, lookup_row_by_mmtb_sync, update_row_in_sheet_sync
+from bot.services.sheet_service import SheetService
+from bot.services.duplicate_service import DuplicateService
 from app.schemas import OCRResult
+
+sheet_service = SheetService()
+duplicate_service = DuplicateService(sheet_service=sheet_service)
 from app.config.factory_structure import FACTORY_STRUCTURE
 import unicodedata
 import re
@@ -66,8 +70,8 @@ GEMINI_ENDPOINT = f"{API_BASE_URL}/parse-text-gemini"
 # ─────────────────────────────────────────────
 # Conversation States
 # ─────────────────────────────────────────────
-SELECT_ENGINE, SELECT_STATUS, CONFIRM_RESULT, EDIT_FIELD, CONFIRM_SAVE, FIND_ASK_EDIT, MMTB_WARN = range(7)
-CFG_SELECT_FACTORY, CFG_SELECT_WORKSHOP, CFG_SELECT_LETTER, CFG_SELECT_NUMBER = range(7, 11)
+SELECT_ENGINE, SELECT_STATUS, CONFIRM_RESULT, EDIT_FIELD, CONFIRM_SAVE, FIND_ASK_EDIT, MMTB_WARN, DUP_WARN = range(8)
+CFG_SELECT_FACTORY, CFG_SELECT_WORKSHOP, CFG_SELECT_LETTER, CFG_SELECT_NUMBER = range(8, 12)
 
 # Callback data constants
 CB_PADDLE          = "engine:paddle"
@@ -93,6 +97,9 @@ CB_SKIP_FIELD      = "edit:skip"
 # OCR validation warning flow
 CB_MMTB_FORCE_SAVE = "mmtb_warn:force_save"
 CB_MMTB_EDIT       = "mmtb_warn:edit"
+# Duplication validation flow
+CB_DUP_FORCE_SAVE  = "dup_warn:force_save"
+CB_DUP_CANCEL      = "dup_warn:cancel"
 
 # Fields to loop through during correction: (display label, key_value dict key)
 FIELDS = [
@@ -844,7 +851,7 @@ async def handle_status_choice(update: Update, context: ContextTypes.DEFAULT_TYP
 # ─────────────────────────────────────────────
 # OCR validation & Save helpers
 # ─────────────────────────────────────────────
-async def _save_ocr_data(query, context, source: str):
+async def _save_ocr_data(query, context, source: str, force_dup: bool = False):
     # Guard: prevent double-save if handler is somehow re-entered
     if context.user_data.get("sheets_saved"):
         await query.edit_message_text(
@@ -864,22 +871,21 @@ async def _save_ocr_data(query, context, source: str):
             markdown=context.user_data.get("markdown_text", ""),
             key_value=kv,
         )
-        await asyncio.to_thread(
-            append_results_to_sheet_sync, [ocr_result], source
-        )
+        await sheet_service.append_results([ocr_result], source, force=force_dup)
         context.user_data["sheets_saved"] = True
+        logging.info("Machine saved successfully")
         
         user_id = query.from_user.id
         current_pos = context.user_data.get("current_position") or get_user_location(user_id)
         reply_markup = get_position_adjustment_keyboard(current_pos) if current_pos else None
 
-        msg_text = (
-            "✅ <b>Thông tin đã xác nhận và lưu vào Google Sheets!</b>\n\n"
-            if source == "TELEGRAM_CONFIRM" else
-            "✅ <b>Dữ liệu đã sửa được lưu thành công vào Google Sheets!</b>\n\n"
-        )
+        if force_dup:
+            msg_text = "✅ Đã lưu thông tin thiết bị thành công.\n\n(Lưu ý: Mã MMTB này đã tồn tại trong Google Sheet.)"
+        else:
+            msg_text = "✅ Đã lưu thông tin thiết bị thành công."
+
         msg_text += (
-            "💡 <b>Nhắc nhở:</b> Đừng quên kiểm tra và cập nhật vị trí mặc định của bạn bằng lệnh <code>/l [vị_trí]</code> (nếu cần thiết) khi đổi khu vực nhé!\n\n"
+            "\n\n💡 <b>Nhắc nhở:</b> Đừng quên kiểm tra và cập nhật vị trí mặc định của bạn bằng lệnh <code>/l [vị_trí]</code> (nếu cần thiết) khi đổi khu vực nhé!\n\n"
             "Gửi ảnh mới để tiếp tục."
         )
 
@@ -955,7 +961,7 @@ async def handle_mmtb_warn_callback(update: Update, context: ContextTypes.DEFAUL
         logging.warning(
             f"[MMTB_VALIDATION] User force-saved invalid code '{mmtb}' — source={source} user_id={user_id}"
         )
-        return await _save_ocr_data(query, context, source)
+        return await _run_duplication_check_and_save(query, context, source)
         
     elif data == CB_MMTB_EDIT:
         context.user_data["field_index"] = 1
@@ -967,6 +973,79 @@ async def handle_mmtb_warn_callback(update: Update, context: ContextTypes.DEFAUL
             parse_mode="Markdown",
         )
         return await _ask_next_field(context, query.message.chat_id)
+
+
+async def _run_duplication_check_and_save(query, context, source: str):
+    kv = context.user_data.get("kv", {})
+    machine_code = _get_kv(kv, "Mã MMTB").strip()
+
+    logging.info(f"User requested save for machine code: {machine_code}")
+
+    # Immediately reply with the loading message
+    await query.edit_message_text(
+        "⏳ Xin vui lòng đợi, để mình kiểm tra xem thông tin có bị trùng lặp không nhé!"
+    )
+    logging.info("Duplication check started")
+
+    try:
+        is_duplicate = await duplicate_service.check_duplication_code(machine_code)
+        if not is_duplicate:
+            logging.info("Duplicate not found")
+            return await _save_ocr_data(query, context, source)
+        else:
+            logging.info("Duplicate found")
+            warning_text = (
+                "⚠️ Mình đã tìm thấy thiết bị có cùng Mã MMTB trong Google Sheet.\n\n"
+                "Điều này có thể tạo ra dữ liệu trùng lặp.\n\n"
+                "Bạn vẫn muốn lưu thiết bị này chứ?"
+            )
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Vẫn lưu", callback_data=CB_DUP_FORCE_SAVE),
+                    InlineKeyboardButton("❌ Hủy", callback_data=CB_DUP_CANCEL),
+                ]
+            ]
+            context.user_data["dup_warn_source"] = source
+            
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=warning_text,
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+            return DUP_WARN
+
+    except Exception as e:
+        logging.exception(f"Error checking duplicate equipment code: {machine_code}")
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=(
+                "❌ Không thể kiểm tra dữ liệu trên Google Sheet.\n\n"
+                "Vui lòng thử lại sau."
+            )
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
+
+
+async def handle_dup_warn_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+    source = context.user_data.get("dup_warn_source", "TELEGRAM_CONFIRM")
+
+    if data == CB_DUP_FORCE_SAVE:
+        logging.info("User selected Force Save")
+        return await _save_ocr_data(query, context, source, force_dup=True)
+
+    elif data == CB_DUP_CANCEL:
+        logging.info("User cancelled save")
+        await query.edit_message_text(
+            "❌ Đã hủy thao tác lưu.\n\n"
+            "Không có dữ liệu nào được thêm vào Google Sheet."
+        )
+        context.user_data.clear()
+        return ConversationHandler.END
 
 
 # ═════════════════════════════════════════════
@@ -982,7 +1061,7 @@ async def handle_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE
         if warn_state is not None:
             return warn_state
 
-        return await _save_ocr_data(query, context, "TELEGRAM_CONFIRM")
+        return await _run_duplication_check_and_save(query, context, "TELEGRAM_CONFIRM")
 
     # ── CB_CONFIRM_EDIT: start field-by-field correction ──
     await query.edit_message_text(
@@ -1281,7 +1360,7 @@ async def handle_save_confirmation(update: Update, context: ContextTypes.DEFAULT
         if warn_state is not None:
             return warn_state
 
-        return await _save_ocr_data(query, context, "TELEGRAM_CORRECTED_CONFIRM")
+        return await _run_duplication_check_and_save(query, context, "TELEGRAM_CORRECTED_CONFIRM")
 
 
 # ═════════════════════════════════════════════
@@ -1354,10 +1433,9 @@ async def handle_manual_save_confirmation(update: Update, context: ContextTypes.
             markdown=context.user_data.get("markdown_text", ""),
             key_value=kv,
         )
-        await asyncio.to_thread(
-            append_results_to_sheet_sync, [ocr_result], "TELEGRAM_MANUAL"
-        )
+        await sheet_service.append_results([ocr_result], "TELEGRAM_MANUAL")
         context.user_data["sheets_saved"] = True
+        logging.info("Machine saved successfully")
 
         user_id = query.from_user.id
         current_pos = context.user_data.get("current_position") or get_user_location(user_id)
@@ -1406,7 +1484,7 @@ async def find_mmtb_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     try:
-        result = await asyncio.to_thread(lookup_row_by_mmtb_sync, mmtb_code)
+        result = await sheet_service.lookup_row_by_mmtb(mmtb_code)
     except Exception as e:
         logging.exception(e)
         await update.message.reply_text(
@@ -1526,9 +1604,7 @@ async def handle_find_save_confirmation(update: Update, context: ContextTypes.DE
         from app.helpers import extract_row_data
         row_data = extract_row_data(ocr_result.key_value)
 
-        success = await asyncio.to_thread(
-            update_row_in_sheet_sync, row_index, row_data, "FIND_UPDATE"
-        )
+        success = await sheet_service.update_row_in_sheet(row_index, row_data, "FIND_UPDATE")
 
         if success:
             context.user_data["sheets_saved"] = True
@@ -1652,6 +1728,9 @@ conv_handler = ConversationHandler(
         ],
         MMTB_WARN: [
             CallbackQueryHandler(handle_mmtb_warn_callback, pattern=f"^({CB_MMTB_FORCE_SAVE}|{CB_MMTB_EDIT})$"),
+        ],
+        DUP_WARN: [
+            CallbackQueryHandler(handle_dup_warn_callback, pattern=f"^({CB_DUP_FORCE_SAVE}|{CB_DUP_CANCEL})$"),
         ],
     },
     fallbacks=[

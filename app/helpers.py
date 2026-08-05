@@ -637,6 +637,7 @@ def extract_row_data(kv: Dict[str, str]) -> List[str]:
 def append_results_to_sheet_sync(
     results: List[OCRResult],
     source: str = "UNKNOWN",
+    force: bool = False,
 ) -> List[str]:
     """Synchronous implementation to append OCR results to Google Sheets.
 
@@ -644,6 +645,7 @@ def append_results_to_sheet_sync(
         results:  List of OCRResult objects to persist.
         source:   Human-readable caller label used in log messages
                   (e.g. 'TELEGRAM_CONFIRM', 'TELEGRAM_CORRECTED_CONFIRM').
+        force:    If True, bypasses sheet-level duplication validation check.
 
     Returns:
         List of Mã MMTB values that were actually inserted
@@ -701,7 +703,7 @@ def append_results_to_sheet_sync(
             row     = extract_row_data(result.key_value)
             ma_mmtb = row[1].strip().lower() if len(row) > 1 else ""
 
-            if GOOGLE_SHEETS_DEDUP_ENABLED:
+            if GOOGLE_SHEETS_DEDUP_ENABLED and not force:
                 if ma_mmtb and ma_mmtb not in DEDUP_EXEMPT and ma_mmtb in existing_ma_mmtb:
                     logger.warning(
                         f"[{source}] DUPLICATE SKIPPED — Mã MMTB '{row[1]}' "
@@ -712,7 +714,7 @@ def append_results_to_sheet_sync(
                 if ma_mmtb and ma_mmtb not in DEDUP_EXEMPT:
                     existing_ma_mmtb.add(ma_mmtb)  # guard within same batch
             else:
-                logger.debug(f"[{source}] Dedup disabled — skipping duplicate check for '{row[1]}'.")
+                logger.debug(f"[{source}] Dedup disabled or forced — skipping duplicate check for '{row[1]}'.")
 
             rows_to_insert.append(row)
             if ma_mmtb:
@@ -744,6 +746,7 @@ def append_results_to_sheet_sync(
 async def append_results_to_sheet(
     results: List[OCRResult],
     source: str = "UNKNOWN",
+    force: bool = False,
 ) -> List[str]:
     """Async wrapper — runs append_results_to_sheet_sync in a thread pool.
 
@@ -756,7 +759,7 @@ async def append_results_to_sheet(
             f"[{source}] Google Sheets integration disabled. Async dispatch skipped."
         )
         return []
-    return await asyncio.to_thread(append_results_to_sheet_sync, results, source)
+    return await asyncio.to_thread(append_results_to_sheet_sync, results, source, force)
 
 
 

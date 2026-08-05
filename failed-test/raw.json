@@ -65,5 +65,14 @@
       "Xuất xứ": "Trung Quốc",
       "Vị trí": "AH2"
     }
+  },
+  {
+    "markdown": "MÁY HÀN MIG-500 (J8110)\n\nMã MMTP B22400383\n\nModel : MIG-500A\n\nXưởng : LA1\n\nVị trí : HÀN 1",
+    "key_value": {
+      "machine_name": "MÁY HÀN MIG-500 (J8110)",
+      "Model": "MIG-500A",
+      "Xưởng": "LA1",
+      "Vị trí": "HÀN 1"
+    }
   }
 ]
