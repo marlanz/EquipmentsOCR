@@ -50,9 +50,11 @@ GOOGLE_SHEETS_DEDUP_ENABLED = os.getenv("GOOGLE_SHEETS_DEDUP_ENABLED", "true").s
 
 # Bind server port (Render passes PORT environment variable dynamically)
 PORT = int(os.getenv("PORT", "8000"))
-POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "5"))
+POLL_INTERVAL = float(os.getenv("POLL_INTERVAL", "0.5"))
 MAX_WAIT_SECONDS = int(os.getenv("MAX_WAIT_SECONDS", "300"))
 PADDLE_MODEL = os.getenv("MODEL", "PaddleOCR-VL-1.6").strip()
+IMAGE_MAX_DIMENSION = int(os.getenv("IMAGE_MAX_DIMENSION", "1600"))
+IMAGE_JPEG_QUALITY = int(os.getenv("IMAGE_JPEG_QUALITY", "85"))
 
 # Configure logging
 logging.basicConfig(
