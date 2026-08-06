@@ -7,6 +7,7 @@ from google.genai.errors import APIError
 from app.schemas import OCRResponse, OCRResult, HealthResponse
 from app.helpers import (
     validate_upload_paddle,
+    optimize_image_bytes,
     submit_ocr_job,
     poll_ocr_job,
     download_and_parse_jsonl,
@@ -55,6 +56,8 @@ async def health_check():
 
 async def process_single_paddle(file: UploadFile) -> List[OCRResult]:
     """Asynchronous worker to process a single document upload via PaddleOCR API."""
+    t_start = time.perf_counter()
+
     # 1. Read file bytes and compute file size in-memory
     try:
         file_bytes = await file.read()
@@ -65,18 +68,38 @@ async def process_single_paddle(file: UploadFile) -> List[OCRResult]:
             detail=f"Failed to read file '{file.filename}': {read_err}"
         )
     file_size = len(file_bytes)
+    t_read = time.perf_counter() - t_start
     
     # 2. Run validations (Extension, MIME type, and size restrictions)
     validate_upload_paddle(file.filename, file.content_type, file_size)
 
-    # 3. Submit OCR Job to external Paddle OCR endpoint
-    job_id = await submit_ocr_job(file.filename, file_bytes, file.content_type)
+    # 3. Optimize image in memory (resize high-res images if needed)
+    opt_bytes, was_resized, t_preprocess = optimize_image_bytes(file_bytes)
 
-    # 4. Poll Job status until completion or timeout failure
+    # 4. Submit OCR Job to external Paddle OCR endpoint
+    t_sub0 = time.perf_counter()
+    job_id = await submit_ocr_job(file.filename, opt_bytes, file.content_type)
+    t_submit = time.perf_counter() - t_sub0
+
+    # 5. Poll Job status until completion or timeout failure
+    t_poll0 = time.perf_counter()
     jsonl_url = await poll_ocr_job(job_id)
+    t_poll = time.perf_counter() - t_poll0
 
-    # 5. Retrieve JSONL pages results and parse them into structured structures
-    return await download_and_parse_jsonl(jsonl_url)
+    # 6. Retrieve JSONL pages results and parse them into structured structures
+    t_dl0 = time.perf_counter()
+    pages = await download_and_parse_jsonl(jsonl_url)
+    t_dl_parse = time.perf_counter() - t_dl0
+
+    t_total = time.perf_counter() - t_start
+    logger.info(
+        f"Pipeline timing for '{file.filename}': "
+        f"Read={t_read:.3f}s, Preprocess={t_preprocess:.3f}s (resized={was_resized}), "
+        f"Submit={t_submit:.3f}s, Poll/Inference={t_poll:.3f}s, "
+        f"Download&Parse={t_dl_parse:.3f}s, Total={t_total:.3f}s"
+    )
+
+    return pages
 
 
 @router.post(

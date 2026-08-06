@@ -1,12 +1,9 @@
-MÁY HÀN CO2 TÂN THÀNH - TTC-500T
+## MÁY HÀN MIG-500 (J8110)
 
-Mã MMTB : B22401469
+Mã MMTB : B22400419
 
-Model : TTC-500T
+Model : Jasic MIG-500A
 
-Xương : AH6
+Xương : LA1
 
-<div style="text-align: center;"><img src="imgs/img_in_image_box_0_309_47_355.jpg" alt="Image" width="7%" /></div>
-
-
-trí : RHT1
+Vị trí : R3

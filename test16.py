@@ -10,7 +10,7 @@ JOB_URL = "https://paddleocr.aistudio-app.com/api/v2/ocr/jobs"
 TOKEN = "94370032f757082a151e8e3e68929f54b0ba7116"
 MODEL = "PaddleOCR-VL-1.6"
 
-file_path = "img1.jpg"
+file_path = "./images/img4.jpg"
 
 headers = {
     "Authorization": f"bearer {TOKEN}",
@@ -22,6 +22,7 @@ optional_payload = {
     "useChartRecognition": False,
 }
 
+overall_start = time.perf_counter()
 print(f"Processing file: {file_path}")
 
 if file_path.startswith("http"):
@@ -54,12 +55,17 @@ if job_response.status_code != 200:
 
 assert job_response.status_code == 200
 jobId = job_response.json()["data"]["jobId"]
+submit_elapsed = time.perf_counter() - overall_start
 print(f"Job submitted successfully. job id: {jobId}")
+print(f"Submission request took {submit_elapsed:.2f} seconds")
 print("Start polling for results")
 
 jsonl_url = ""
 while True:
+    poll_start = time.perf_counter()
     job_result_response = requests.get(f"{JOB_URL}/{jobId}", headers=headers)
+    poll_elapsed = time.perf_counter() - poll_start
+    print(f"Status check took {poll_elapsed:.2f} seconds")
     assert job_result_response.status_code == 200
     state = job_result_response.json()["data"]["state"]
     if state == 'pending':
@@ -75,7 +81,9 @@ while True:
         extracted_pages = job_result_response.json()['data']['extractProgress']['extractedPages']
         start_time = job_result_response.json()['data']['extractProgress']['startTime']
         end_time = job_result_response.json()['data']['extractProgress']['endTime']
+        total_elapsed = time.perf_counter() - overall_start
         print(f"Job completed, successfully extracted pages: {extracted_pages}, start time: {start_time}, end time: {end_time}")
+        print(f"Total processing time: {total_elapsed:.2f} seconds")
         jsonl_url = job_result_response.json()['data']['resultUrl']['jsonUrl']
         break
     elif state == "failed":
@@ -83,7 +91,7 @@ while True:
         print(f"Job failed, failure reason：{error_msg}")
         sys.exit()
 
-    time.sleep(5)
+    time.sleep(2)
 
 if jsonl_url:
     jsonl_response = requests.get(jsonl_url)
@@ -102,21 +110,5 @@ if jsonl_url:
             with open(md_filename, "w", encoding="utf-8") as md_file:
                 md_file.write(res["markdown"]["text"])
             print(f"Markdown document saved at {md_filename}")
-            for img_path, img in res["markdown"]["images"].items():
-                full_img_path = os.path.join(output_dir, img_path)
-                os.makedirs(os.path.dirname(full_img_path), exist_ok=True)
-                img_bytes = requests.get(img).content
-                with open(full_img_path, "wb") as img_file:
-                    img_file.write(img_bytes)
-                print(f"Image saved to: {full_img_path}")
-            for img_name, img in res["outputImages"].items():
-                img_response = requests.get(img)
-                if img_response.status_code == 200:
-                    # Save image to local
-                    filename = os.path.join(output_dir, f"{img_name}_{page_num}.jpg")
-                    with open(filename, "wb") as f:
-                        f.write(img_response.content)
-                    print(f"Image saved to: {filename}")
-                else:
-                    print(f"Failed to download image, status code: {img_response.status_code}")
+            # Skip downloading embedded or output images unless you explicitly need them.
             page_num += 1

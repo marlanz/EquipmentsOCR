@@ -8,7 +8,7 @@ import time
 import asyncio
 import httpx
 import logging
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 from fastapi import HTTPException, status
 from pydantic import BaseModel, Field
 from PIL import Image, UnidentifiedImageError
@@ -24,6 +24,8 @@ from app.config import (
     PADDLE_MODEL,
     POLL_INTERVAL,
     MAX_WAIT_SECONDS,
+    IMAGE_MAX_DIMENSION,
+    IMAGE_JPEG_QUALITY,
     GEMINI_API_KEY,
     GEMINI_MODEL,
     GEMINI_API_KEY_2,
@@ -43,6 +45,7 @@ from app.config import (
 )
 from app.schemas import OCRResult
 from app.paddle_transformer import transform_paddleocr_result
+from app.http_client import get_http_client
 
 # --- PaddleOCR Validation Limits ---
 PADDLE_MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB limit
@@ -174,8 +177,43 @@ def validate_upload_paddle(filename: str, content_type: str, file_size: int):
         )
 
 
+def optimize_image_bytes(file_bytes: bytes, max_dim: int = IMAGE_MAX_DIMENSION, quality: int = IMAGE_JPEG_QUALITY) -> Tuple[bytes, bool, float]:
+    """Optimizes image bytes in memory: if width or height > max_dim, resizes proportionally
+    and re-encodes to JPEG with specified quality.
+    Returns: (optimized_bytes, was_resized, elapsed_seconds)
+    """
+    t0 = time.perf_counter()
+    try:
+        with Image.open(io.BytesIO(file_bytes)) as img:
+            w, h = img.size
+            if w <= max_dim and h <= max_dim and img.format in ("JPEG", "MPO"):
+                return file_bytes, False, round(time.perf_counter() - t0, 4)
+            
+            if w > max_dim or h > max_dim:
+                ratio = min(max_dim / w, max_dim / h)
+                new_w, new_h = max(1, int(w * ratio)), max(1, int(h * ratio))
+                if img.mode not in ("RGB", "L"):
+                    img = img.convert("RGB")
+                img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                was_resized = True
+            else:
+                if img.mode not in ("RGB", "L"):
+                    img = img.convert("RGB")
+                was_resized = False
+
+            out_buf = io.BytesIO()
+            img.save(out_buf, format="JPEG", quality=quality, optimize=True)
+            optimized_bytes = out_buf.getvalue()
+            elapsed = round(time.perf_counter() - t0, 4)
+            logger.info(f"Image optimized: {len(file_bytes)} -> {len(optimized_bytes)} bytes (resized={was_resized}) in {elapsed:.3f}s")
+            return optimized_bytes, was_resized, elapsed
+    except Exception as exc:
+        logger.warning(f"Image optimization skipped due to error: {exc}")
+        return file_bytes, False, round(time.perf_counter() - t0, 4)
+
+
 async def submit_ocr_job(filename: str, file_bytes: bytes, content_type: str) -> str:
-    """Uploads file bytes directly to the Paddle OCR API in memory."""
+    """Uploads file bytes directly to the Paddle OCR API in memory using shared HTTP client."""
     headers = {
         "Authorization": f"bearer {PADDLE_API_KEY}"
     }
@@ -192,27 +230,27 @@ async def submit_ocr_job(filename: str, file_bytes: bytes, content_type: str) ->
     }
 
     logger.info(f"Submitting in-memory OCR job for file '{filename}'...")
-    async with httpx.AsyncClient() as client:
-        try:
-            r = await client.post(
-                PADDLE_BASE_URL,
-                headers=headers,
-                data=data,
-                files=files,
-                timeout=120.0
-            )
-        except httpx.TimeoutException:
-            logger.error("Timeout occurred while submitting file to Paddle API")
-            raise HTTPException(
-                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail="Paddle API request timed out during submission."
-            )
-        except httpx.RequestError as exc:
-            logger.error(f"HTTP request error during submission: {exc}")
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to communicate with Paddle API: {exc}"
-            )
+    client = get_http_client()
+    try:
+        r = await client.post(
+            PADDLE_BASE_URL,
+            headers=headers,
+            data=data,
+            files=files,
+            timeout=120.0
+        )
+    except httpx.TimeoutException:
+        logger.error("Timeout occurred while submitting file to Paddle API")
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Paddle API request timed out during submission."
+        )
+    except httpx.RequestError as exc:
+        logger.error(f"HTTP request error during submission: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to communicate with Paddle API: {exc}"
+        )
 
     if r.status_code == 401:
         raise HTTPException(
@@ -241,96 +279,99 @@ async def submit_ocr_job(filename: str, file_bytes: bytes, content_type: str) ->
 
 
 async def poll_ocr_job(job_id: str) -> str:
-    """Polls the Paddle API status until 'done' or 'failed'."""
+    """Polls the Paddle API status using shared client and fast adaptive interval until 'done' or 'failed'."""
     headers = {
         "Authorization": f"bearer {PADDLE_API_KEY}"
     }
     status_url = f"{PADDLE_BASE_URL}/{job_id}"
     start_time = time.time()
+    client = get_http_client()
 
     logger.info(f"Starting polling loop for Job ID {job_id}...")
-    async with httpx.AsyncClient() as client:
-        while time.time() - start_time < MAX_WAIT_SECONDS:
-            try:
-                r = await client.get(status_url, headers=headers, timeout=30.0)
-            except httpx.TimeoutException:
-                logger.warning(f"Timeout checking status for Job {job_id}, retrying...")
-                await asyncio.sleep(POLL_INTERVAL)
-                continue
-            except httpx.RequestError as exc:
-                logger.error(f"Error querying status for Job {job_id}: {exc}")
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"Failed to communicate with Paddle status API: {exc}"
-                )
-
-            if r.status_code == 401:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Paddle API authentication failed during status polling."
-                )
-
-            if r.status_code != 200:
-                logger.error(f"Downstream Paddle status query returned status {r.status_code}")
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"Downstream Paddle API status check failed: Status {r.status_code}."
-                )
-
-            try:
-                res_data = r.json()
-                data = res_data["data"]
-                state = data["state"]
-            except (KeyError, ValueError) as exc:
-                logger.error(f"Malformed status response for Job {job_id}: {exc}")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Malformed status response from Paddle API."
-                )
-
-            if state == "done":
-                return data["resultUrl"]["jsonUrl"]
-
-            if state == "failed":
-                error_msg = data.get("errorMsg", "OCR job failed")
-                logger.error(f"OCR Job {job_id} failed on Paddle server: {error_msg}")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Downstream Paddle OCR job failed: {error_msg}"
-                )
-
-            logger.info(f"Job {job_id} is '{state}'. Sleeping {POLL_INTERVAL}s...")
+    poll_count = 0
+    while time.time() - start_time < MAX_WAIT_SECONDS:
+        poll_count += 1
+        try:
+            r = await client.get(status_url, headers=headers, timeout=30.0)
+        except httpx.TimeoutException:
+            logger.warning(f"Timeout checking status for Job {job_id}, retrying...")
             await asyncio.sleep(POLL_INTERVAL)
+            continue
+        except httpx.RequestError as exc:
+            logger.error(f"Error querying status for Job {job_id}: {exc}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to communicate with Paddle status API: {exc}"
+            )
 
-        logger.error(f"Polling timed out for Job ID {job_id} after {MAX_WAIT_SECONDS} seconds.")
-        raise HTTPException(
-            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail="Paddle OCR job polling timed out."
-        )
+        if r.status_code == 401:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Paddle API authentication failed during status polling."
+            )
+
+        if r.status_code != 200:
+            logger.error(f"Downstream Paddle status query returned status {r.status_code}")
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Downstream Paddle API status check failed: Status {r.status_code}."
+            )
+
+        try:
+            res_data = r.json()
+            data = res_data["data"]
+            state = data["state"]
+        except (KeyError, ValueError) as exc:
+            logger.error(f"Malformed status response for Job {job_id}: {exc}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Malformed status response from Paddle API."
+            )
+
+        if state == "done":
+            elapsed = round(time.time() - start_time, 3)
+            logger.info(f"Job {job_id} done after {elapsed}s ({poll_count} status checks)")
+            return data["resultUrl"]["jsonUrl"]
+
+        if state == "failed":
+            error_msg = data.get("errorMsg", "OCR job failed")
+            logger.error(f"OCR Job {job_id} failed on Paddle server: {error_msg}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Downstream Paddle OCR job failed: {error_msg}"
+            )
+
+        await asyncio.sleep(POLL_INTERVAL)
+
+    logger.error(f"Polling timed out for Job ID {job_id} after {MAX_WAIT_SECONDS} seconds.")
+    raise HTTPException(
+        status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+        detail="Paddle OCR job polling timed out."
+    )
 
 
 async def download_and_parse_jsonl(jsonl_url: str) -> List[OCRResult]:
-    """Downloads JSONL layout result from Paddle and parses structured pages."""
+    """Downloads JSONL layout result from Paddle and parses structured pages using shared HTTP client."""
     logger.info(f"Downloading OCR result from: {jsonl_url}")
-    async with httpx.AsyncClient() as client:
-        try:
-            r = await client.get(jsonl_url, timeout=60.0)
-            r.raise_for_status()
-        except httpx.TimeoutException:
-            raise HTTPException(
-                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail="Timeout downloading results from Paddle storage."
-            )
-        except httpx.HTTPStatusError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to download results from Paddle: Status {exc.response.status_code}."
-            )
-        except httpx.RequestError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Network error downloading results from Paddle: {exc}"
-            )
+    client = get_http_client()
+    try:
+        r = await client.get(jsonl_url, timeout=60.0)
+        r.raise_for_status()
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Timeout downloading results from Paddle storage."
+        )
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to download results from Paddle: Status {exc.response.status_code}."
+        )
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Network error downloading results from Paddle: {exc}"
+        )
 
     pages = []
     try:
@@ -345,8 +386,7 @@ async def download_and_parse_jsonl(jsonl_url: str) -> List[OCRResult]:
             for res in result.get("layoutParsingResults", []):
                 markdown_text = res.get("markdown", {}).get("text", "")
 
-                # Use the dedicated PaddleOCR transformer instead of the
-                # generic markdown parser.  Gemini pipeline is unaffected.
+                # Use the dedicated PaddleOCR transformer
                 parsed    = transform_paddleocr_result(res)
                 key_value = parsed.key_value
 
@@ -367,14 +407,14 @@ async def download_and_parse_jsonl(jsonl_url: str) -> List[OCRResult]:
 
 
 async def check_paddle_connectivity() -> bool:
-    """Validates external endpoint availability for PaddleOCR."""
+    """Validates external endpoint availability for PaddleOCR using shared client."""
     if not PADDLE_API_KEY or not PADDLE_BASE_URL:
         return False
     headers = {"Authorization": f"bearer {PADDLE_API_KEY}"}
+    client = get_http_client()
     try:
-        async with httpx.AsyncClient() as client:
-            await client.get(PADDLE_BASE_URL, headers=headers, timeout=2.0)
-            return True
+        await client.get(PADDLE_BASE_URL, headers=headers, timeout=2.0)
+        return True
     except Exception as exc:
         logger.warning(f"Paddle connection check failed: {exc}")
         return False
