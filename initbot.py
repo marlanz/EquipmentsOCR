@@ -7,9 +7,10 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     ApplicationBuilder,
+    ApplicationHandlerStop,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
@@ -71,6 +72,77 @@ GEMINI_ENDPOINT = f"{API_BASE_URL}/parse-text-gemini"
 # Conversation States
 # ─────────────────────────────────────────────
 SELECT_ENGINE, SELECT_STATUS, CONFIRM_RESULT, EDIT_FIELD, CONFIRM_SAVE, FIND_ASK_EDIT, MMTB_WARN, DUP_WARN = range(8)
+
+# ─────────────────────────────────────────────
+# Bot State Machine
+# ─────────────────────────────────────────────
+from enum import Enum
+
+class BotState(str, Enum):
+    NORMAL                      = "normal"
+    MULTI_IMAGE_COLLECTING      = "multi_image_collecting"
+    MULTI_IMAGE_SELECTING_MODEL = "multi_image_selecting_model"
+    MULTI_IMAGE_PROCESSING      = "multi_image_processing"
+    MULTI_IMAGE_REVIEW          = "multi_image_review"
+    MULTI_IMAGE_SAVING          = "multi_image_saving"
+
+# ─────────────────────────────────────────────
+# Persistent ReplyKeyboard definitions
+# (Pattern from testmenu.py)
+# ─────────────────────────────────────────────
+MAIN_MENU_KEYBOARD = ReplyKeyboardMarkup(
+    [["📷 Đọc 1 hình", "📚 Đọc nhiều hình"]],
+    resize_keyboard=True,
+    is_persistent=True,
+)
+
+MULTI_IMAGE_KEYBOARD = ReplyKeyboardMarkup(
+    [["↩️ Trở về", "▶️ Tiến hành đọc"]],
+    resize_keyboard=True,
+    is_persistent=True,
+)
+
+REMOVE_KEYBOARD = ReplyKeyboardRemove()
+
+
+async def show_main_menu(message, text: str):
+    """Send a message with the persistent main menu keyboard attached."""
+    await message.reply_text(
+        text,
+        reply_markup=MAIN_MENU_KEYBOARD,
+        parse_mode="HTML",
+    )
+
+
+async def show_multi_image_menu(message, text: str):
+    """Send a message with the multi-image keyboard attached."""
+    await message.reply_text(
+        text,
+        reply_markup=MULTI_IMAGE_KEYBOARD,
+        parse_mode="HTML",
+    )
+
+
+async def hide_bottom_menu(message, text: str, parse_mode: str = "HTML"):
+    """Send a message that removes the persistent ReplyKeyboard."""
+    await message.reply_text(
+        text,
+        reply_markup=REMOVE_KEYBOARD,
+        parse_mode=parse_mode,
+    )
+
+
+# Callback data for multi-image engine selection
+CB_MULTI_PADDLE   = "multi_engine:paddle"
+CB_MULTI_GEMINI_1 = "multi_engine:gemini1"
+CB_MULTI_GEMINI_2 = "multi_engine:gemini2"
+CB_MULTI_GEMINI_3 = "multi_engine:gemini3"
+CB_MULTI_GEMINI_4 = "multi_engine:gemini4"
+CB_MULTI_GEMINI_5 = "multi_engine:gemini5"
+
+# Callback data for multi-image save confirmation
+CB_MULTI_SAVE   = "multi_save:confirm"
+CB_MULTI_CANCEL = "multi_save:cancel"
 CFG_SELECT_FACTORY, CFG_SELECT_WORKSHOP, CFG_SELECT_LETTER, CFG_SELECT_NUMBER = range(8, 12)
 
 # Callback data constants
@@ -555,26 +627,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     user_id = update.effective_user.id
     load_user_config(user_id, context)
+    context.user_data["bot_state"] = BotState.NORMAL
     
     current_factory = html.escape(context.user_data.get("factory") or "Chưa thiết lập ❌")
     current_workshop = html.escape(context.user_data.get("workshop") or "Chưa thiết lập ❌")
     current_position = html.escape(context.user_data.get("current_position") or "Chưa thiết lập ❌")
     
-    await update.message.reply_text(
+    await show_main_menu(
+        update.message,
         "👋 <b>Chào mừng đến với Equipment OCR Bot!</b>\n\n"
         "⚙️ <b>Cấu hình mặc định hiện tại của bạn:</b>\n"
         f"🏭 Xưởng chính: <b>{current_factory}</b>\n"
         f"🏢 Tổ/Xưởng: <b>{current_workshop}</b>\n"
         f"📍 Vị trí cột: <b>{current_position}</b>\n"
         "<i>(Sử dụng lệnh <code>/x</code> để thay đổi xưởng/vị trí hoặc <code>/l [vị_trí]</code> để đổi nhanh vị trí cột)</i>\n\n"
-        "📋 <b>Quy trình thêm thiết bị:</b>\n"
-        "1️⃣ <b>Gửi ảnh</b> hoặc PDF nhãn máy/thiết bị vào chat\n"
-        "2️⃣ <b>Chọn OCR Engine</b> (Paddle hoặc Gemini)\n"
-        "3️⃣ <b>Kiểm tra thông tin</b> trích xuất (đặc biệt là Vị trí & Xưởng)\n"
-        "4️⃣ <b>Xác nhận</b> hoặc <b>Sửa đổi</b> các trường nếu có sai lệch\n"
-        "5️⃣ Dữ liệu sẽ tự động lưu vào Google Sheets\n\n"
-        "📸 Hãy gửi ảnh hoặc PDF nhãn thiết bị để bắt đầu!",
-        parse_mode="HTML",
+        "📋 <b>Hướng dẫn sử dụng:</b>\n"
+        "📷 <b>Đọc 1 hình</b> — Xử lý OCR từng ảnh riêng lẻ\n"
+        "📚 <b>Đọc nhiều hình</b> — Thu thập nhiều ảnh rồi đọc cùng lúc\n\n"
+        "<i>Sử dụng lệnh <code>/x</code> để thiết lập Xưởng & Vị trí trước khi bắt đầu.</i>",
     )
     return ConversationHandler.END
 
@@ -1640,6 +1710,550 @@ async def handle_find_save_confirmation(update: Update, context: ContextTypes.DE
     return ConversationHandler.END
 
 
+# ═════════════════════════════════════════════
+# MULTI-IMAGE FLOW HANDLERS
+# ═════════════════════════════════════════════
+
+# ─────────────────────────────────────────────
+# Helper: build OCR engine inline keyboard (reused from single-image flow)
+# ─────────────────────────────────────────────
+def _multi_engine_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔵 Paddle OCR",              callback_data=CB_MULTI_PADDLE)],
+        [InlineKeyboardButton(f"✨ Gemini {GEMINI_MODEL}",   callback_data=CB_MULTI_GEMINI_1)],
+        [InlineKeyboardButton(f"✨ Gemini {GEMINI_MODEL_2}", callback_data=CB_MULTI_GEMINI_2)],
+        [InlineKeyboardButton(f"✨ Gemini {GEMINI_MODEL_3}", callback_data=CB_MULTI_GEMINI_3)],
+        [InlineKeyboardButton(f"✨ Gemini {GEMINI_MODEL_4}", callback_data=CB_MULTI_GEMINI_4)],
+        [InlineKeyboardButton(f"✨ Gemini {GEMINI_MODEL_5}", callback_data=CB_MULTI_GEMINI_5)],
+    ])
+
+
+# ─────────────────────────────────────────────
+# Helper: apply workshop/location overrides to a kv dict
+# (mirrors the logic in handle_engine_choice)
+# ─────────────────────────────────────────────
+def _apply_context_overrides(kv: dict, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> dict:
+    ws = context.user_data.get("workshop") or get_user_workshop(user_id)
+    if ws:
+        keys_to_remove = [k for k in kv if k.lower().strip() in
+                          ["xưởng", "xuong", "xuong san xuat", "nha may", "xương"]]
+        for k in keys_to_remove:
+            del kv[k]
+        kv["Xưởng"] = ws
+
+    pos = context.user_data.get("current_position") or get_user_location(user_id)
+    if pos:
+        keys_to_remove = [k for k in kv if k.lower().strip() in
+                          ["vị trí", "vi tri", "vitri", "vi tri ", "tri"]]
+        for k in keys_to_remove:
+            del kv[k]
+        kv["Vị trí"] = pos
+
+    return kv
+
+
+# ─────────────────────────────────────────────
+# Helper: OCR a single image against an endpoint (async)
+# ─────────────────────────────────────────────
+async def _ocr_one_image(bot, file_id: str, endpoint: str, index: int) -> dict:
+    """
+    Downloads a Telegram photo and POSTs it to the OCR endpoint.
+    Returns a dict with keys: file_id, kv, markdown, error.
+    """
+    try:
+        telegram_file = await bot.get_file(file_id)
+        image_bytes = bytes(await telegram_file.download_as_bytearray())
+        logging.info(f"[MULTI] Image {index}: downloaded {len(image_bytes)} bytes → {endpoint}")
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                endpoint,
+                files=[("files", ("image.jpg", image_bytes, "image/jpeg"))],
+            )
+
+        if response.status_code != 200:
+            logging.error(f"[MULTI] Image {index}: API error {response.status_code}")
+            return {"file_id": file_id, "kv": {}, "markdown": "",
+                    "error": f"API lỗi {response.status_code}"}
+
+        data = response.json()
+        results = data.get("results", [])
+        if not results:
+            return {"file_id": file_id, "kv": {}, "markdown": "",
+                    "error": "Không tìm thấy kết quả OCR"}
+
+        result = results[0]
+        kv = dict(result.get("key_value", {}))
+        markdown = result.get("markdown", "")
+        return {"file_id": file_id, "kv": kv, "markdown": markdown, "error": None}
+
+    except httpx.TimeoutException:
+        logging.error(f"[MULTI] Image {index}: timeout")
+        return {"file_id": file_id, "kv": {}, "markdown": "", "error": "Timeout"}
+    except Exception as e:
+        logging.exception(f"[MULTI] Image {index}: unexpected error")
+        return {"file_id": file_id, "kv": {}, "markdown": "", "error": str(e)}
+
+
+# ─────────────────────────────────────────────
+# Helper: format a multi-image OCR result list as a message
+# ─────────────────────────────────────────────
+def _format_multi_results(classified: list) -> str:
+    """classified is a list of dicts with keys: kv, valid, duplicate, within_batch_dup, error."""
+    valid_count   = sum(1 for m in classified if m["valid"] and not m["duplicate"] and not m["within_batch_dup"])
+    dup_count     = sum(1 for m in classified if m["duplicate"] or m["within_batch_dup"])
+    invalid_count = sum(1 for m in classified if not m["valid"])
+
+    msg  = "📋 <b>Kết quả đọc OCR</b>\n\n"
+    msg += f"Đã nhận diện: <b>{len(classified)} thiết bị</b>\n"
+    msg += f"✅ Có thể lưu: <b>{valid_count}</b>\n"
+    msg += f"⚠️ Đã tồn tại / trùng lặp: <b>{dup_count}</b>\n"
+    msg += f"❌ Không hợp lệ: <b>{invalid_count}</b>\n\n"
+
+    for i, m in enumerate(classified, 1):
+        kv = m["kv"]
+        badge = (
+            "✅" if (m["valid"] and not m["duplicate"] and not m["within_batch_dup"])
+            else "⚠️" if (m["duplicate"] or m["within_batch_dup"])
+            else "❌"
+        )
+        msg += f"{badge} <b>{i}. {html.escape(_get_kv(kv, 'machine_name') or '(Không rõ tên)')}</b>\n"
+        msg += f"   🔢 Mã MMTB: <code>{html.escape(_get_kv(kv, 'Mã MMTB'))}</code>\n"
+        msg += f"   📦 Model: {html.escape(_get_kv(kv, 'Model'))}\n"
+        msg += f"   🏭 Xưởng: {html.escape(_get_kv(kv, 'Xưởng'))}\n"
+        msg += f"   📍 Vị trí: {html.escape(_get_kv(kv, 'Vị trí'))}\n"
+        msg += f"   ⚡ Trạng thái: {html.escape(_get_kv(kv, 'status'))}\n"
+        if m.get("error"):
+            msg += f"   ⚠️ Lỗi OCR: {html.escape(m['error'])}\n"
+        if m["within_batch_dup"]:
+            msg += f"   ⚠️ <i>Trùng lặp trong lô hiện tại</i>\n"
+        elif m["duplicate"]:
+            msg += f"   ⚠️ <i>Đã tồn tại trong Google Sheets</i>\n"
+        elif not m["valid"]:
+            msg += f"   ❌ <i>Mã MMTB không hợp lệ — sẽ không được lưu</i>\n"
+        msg += "\n"
+
+    return msg.strip()
+
+
+# ─────────────────────────────────────────────
+# MULTI-IMAGE: "📷 Đọc 1 hình" — enter single-image mode
+# ─────────────────────────────────────────────
+async def handle_main_menu_single(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """User selected 📷 Đọc 1 hình from the main menu."""
+    # Clear any lingering multi-image state
+    for key in ["bot_state", "multi_images", "multi_selected_engine",
+                "multi_ocr_results", "multi_classified"]:
+        context.user_data.pop(key, None)
+    context.user_data["bot_state"] = BotState.NORMAL
+
+    user_id = update.effective_user.id
+    load_user_config(user_id, context)
+
+    await show_main_menu(
+        update.message,
+        "📷 <b>Chế độ đọc 1 hình</b>\n\n"
+        "Hãy gửi ảnh nhãn thiết bị vào chat để bắt đầu OCR."
+    )
+
+
+# ─────────────────────────────────────────────
+# MULTI-IMAGE: "📚 Đọc nhiều hình" — enter multi-image mode
+# ─────────────────────────────────────────────
+async def handle_enter_multi_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """User selected 📚 Đọc nhiều hình from the main menu."""
+    user_id = update.effective_user.id
+    load_user_config(user_id, context)
+
+    # Initialise multi-image session
+    context.user_data["bot_state"]   = BotState.MULTI_IMAGE_COLLECTING
+    context.user_data["multi_images"] = []
+    context.user_data.pop("multi_selected_engine", None)
+    context.user_data.pop("multi_ocr_results", None)
+    context.user_data.pop("multi_classified", None)
+
+    await show_multi_image_menu(
+        update.message,
+        "📚 <b>Chế độ đọc nhiều hình</b>\n\n"
+        "Hãy gửi các ảnh nhãn thiết bị vào chat.\n"
+        "Sau khi gửi đủ ảnh, nhấn <b>▶️ Tiến hành đọc</b> để bắt đầu OCR.\n\n"
+        "Nhấn <b>↩️ Trở về</b> để hủy và quay lại menu chính."
+    )
+
+
+# ─────────────────────────────────────────────
+# MULTI-IMAGE: photo received during collecting state
+# (Registered at group=-1 so it runs before conv_handler)
+# ─────────────────────────────────────────────
+async def handle_multi_image_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Collect photos while in MULTI_IMAGE_COLLECTING state."""
+    if context.user_data.get("bot_state") != BotState.MULTI_IMAGE_COLLECTING:
+        # Not in multi-collect mode — let conv_handler take over
+        return
+
+    photo = update.message.photo[-1]
+    images: list = context.user_data.setdefault("multi_images", [])
+    images.append(photo.file_id)
+    count = len(images)
+
+    logging.info(f"[MULTI] User {update.effective_user.id} uploaded image #{count}: {photo.file_id}")
+
+    await update.message.reply_text(
+        f"📷 Đã nhận <b>{count}</b> hình.\n"
+        "Tiếp tục gửi ảnh hoặc nhấn <b>▶️ Tiến hành đọc</b> khi đã đủ.",
+        parse_mode="HTML",
+    )
+    # Mark update as handled so conv_handler does NOT also process this photo
+    raise ApplicationHandlerStop
+
+
+# ─────────────────────────────────────────────
+# MULTI-IMAGE: "↩️ Trở về" — cancel and return to main menu
+# ─────────────────────────────────────────────
+async def handle_multi_go_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel multi-image mode and return to main menu."""
+    bot_state = context.user_data.get("bot_state")
+    if bot_state not in (
+        BotState.MULTI_IMAGE_COLLECTING,
+        BotState.MULTI_IMAGE_SELECTING_MODEL,
+        BotState.MULTI_IMAGE_PROCESSING,
+        BotState.MULTI_IMAGE_REVIEW,
+        BotState.MULTI_IMAGE_SAVING,
+    ):
+        # Not in a multi-image state — ignore or show main menu
+        context.user_data["bot_state"] = BotState.NORMAL
+        await show_main_menu(update.message, "📋 Menu chính:")
+        return
+
+    # Clear all multi-image temporary state
+    for key in ["multi_images", "multi_selected_engine",
+                "multi_ocr_results", "multi_classified"]:
+        context.user_data.pop(key, None)
+    context.user_data["bot_state"] = BotState.NORMAL
+
+    logging.info(f"[MULTI] User {update.effective_user.id} returned to main menu")
+
+    await show_main_menu(
+        update.message,
+        "↩️ Đã hủy và quay về menu chính.\n\n"
+        "Chọn chức năng bên dưới:"
+    )
+
+
+# ─────────────────────────────────────────────
+# MULTI-IMAGE: "▶️ Tiến hành đọc" — verify images, show model selector
+# ─────────────────────────────────────────────
+async def handle_multi_proceed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """User pressed Tiến hành đọc — validate image count then show model picker."""
+    bot_state = context.user_data.get("bot_state")
+    if bot_state != BotState.MULTI_IMAGE_COLLECTING:
+        # Not in collecting state — silently ignore
+        return
+
+    images = context.user_data.get("multi_images", [])
+    if not images:
+        await update.message.reply_text(
+            "⚠️ Vui lòng gửi ít nhất một hình trước khi tiến hành đọc."
+        )
+        return
+
+    context.user_data["bot_state"] = BotState.MULTI_IMAGE_SELECTING_MODEL
+    logging.info(f"[MULTI] User {update.effective_user.id} proceeding with {len(images)} image(s)")
+
+    # Hide bottom keyboard, then show inline model selector
+    await hide_bottom_menu(
+        update.message,
+        f"🤖 Đã nhận <b>{len(images)}</b> hình.\n\n"
+        "Vui lòng chọn model OCR:",
+    )
+    await update.message.reply_text(
+        "Chọn model:",
+        reply_markup=_multi_engine_keyboard(),
+    )
+
+
+# ─────────────────────────────────────────────
+# MULTI-IMAGE: OCR model selected → run OCR concurrently
+# ─────────────────────────────────────────────
+async def handle_multi_engine_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle multi-image OCR model callback → run OCR on all images concurrently."""
+    query = update.callback_query
+    await query.answer()
+
+    if context.user_data.get("bot_state") != BotState.MULTI_IMAGE_SELECTING_MODEL:
+        await query.edit_message_text("⚠️ Trạng thái không hợp lệ. Vui lòng bắt đầu lại.")
+        return
+
+    engine = query.data  # e.g. "multi_engine:gemini2"
+    if engine == CB_MULTI_PADDLE:
+        engine_name = "Paddle OCR"
+        endpoint    = PADDLE_ENDPOINT
+    else:
+        model_map = {
+            CB_MULTI_GEMINI_1: (GEMINI_MODEL,   1),
+            CB_MULTI_GEMINI_2: (GEMINI_MODEL_2, 2),
+            CB_MULTI_GEMINI_3: (GEMINI_MODEL_3, 3),
+            CB_MULTI_GEMINI_4: (GEMINI_MODEL_4, 4),
+            CB_MULTI_GEMINI_5: (GEMINI_MODEL_5, 5),
+        }
+        model_name, model_index = model_map.get(engine, (GEMINI_MODEL, 1))
+        engine_name = f"Gemini {model_name}"
+        endpoint    = f"{GEMINI_ENDPOINT}?model_index={model_index}"
+
+    context.user_data["multi_selected_engine"] = engine_name
+    context.user_data["bot_state"] = BotState.MULTI_IMAGE_PROCESSING
+
+    images: list = context.user_data.get("multi_images", [])
+    user_id = query.from_user.id
+
+    # Show a single progress message (edit it as we go)
+    await query.edit_message_text(
+        f"⏳ Đang đọc <b>{len(images)}</b> hình ảnh với <b>{html.escape(engine_name)}</b>...\n\n"
+        "Vui lòng đợi trong giây lát.",
+        parse_mode="HTML",
+    )
+
+    logging.info(f"[MULTI] Starting concurrent OCR for {len(images)} images | engine={engine_name}")
+
+    # ── Concurrent OCR ───────────────────────────────────────────────────────
+    tasks = [
+        _ocr_one_image(context.bot, file_id, endpoint, i + 1)
+        for i, file_id in enumerate(images)
+    ]
+    try:
+        raw_results = await asyncio.gather(*tasks)
+    except Exception as e:
+        logging.exception("[MULTI] Unexpected error during asyncio.gather")
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="❌ Không thể đọc hình ảnh.\n\nVui lòng thử lại."
+        )
+        context.user_data["bot_state"] = BotState.MULTI_IMAGE_COLLECTING
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="Quay lại thu thập ảnh:",
+            reply_markup=MULTI_IMAGE_KEYBOARD,
+        )
+        return
+
+    # ── Apply overrides & classification ────────────────────────────────────
+    load_user_config(user_id, context)
+    classified = []
+    seen_codes: set[str] = set()
+
+    for raw in raw_results:
+        kv = raw["kv"]
+        error = raw["error"]
+
+        if error or not kv:
+            classified.append({
+                "kv": kv, "markdown": raw.get("markdown", ""),
+                "valid": False, "duplicate": False, "within_batch_dup": False,
+                "error": error or "OCR trả về rỗng",
+            })
+            continue
+
+        # Apply workshop/location from session
+        kv = _apply_context_overrides(kv, context, user_id)
+        # Hardcode status for multi-image flow
+        kv["status"] = "Đang hoạt động"
+
+        mmtb = _get_kv(kv, "Mã MMTB").strip()
+        is_valid = (
+            validate_mmtb(mmtb)
+            and mmtb not in ("", "—", "CHƯA CÓ MÃ")
+        )
+
+        # Within-batch duplicate check
+        within_batch_dup = False
+        if is_valid:
+            norm_code = mmtb.upper()
+            if norm_code in seen_codes:
+                within_batch_dup = True
+            else:
+                seen_codes.add(norm_code)
+
+        classified.append({
+            "kv": kv, "markdown": raw.get("markdown", ""),
+            "valid": is_valid,
+            "duplicate": False,       # Google Sheet check happens next
+            "within_batch_dup": within_batch_dup,
+            "error": None,
+        })
+
+    # ── Google Sheet duplication check (sequential to avoid rate-limits) ─────
+    try:
+        for m in classified:
+            if not m["valid"] or m["within_batch_dup"]:
+                continue
+            mmtb = _get_kv(m["kv"], "Mã MMTB").strip()
+            m["duplicate"] = await duplicate_service.check_duplication_code(mmtb)
+    except Exception as e:
+        logging.exception("[MULTI] Error during duplication check")
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="❌ Không thể kiểm tra dữ liệu trên Excel.\n\nVui lòng thử lại sau."
+        )
+        context.user_data["bot_state"] = BotState.MULTI_IMAGE_COLLECTING
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="Quay lại thu thập ảnh:",
+            reply_markup=MULTI_IMAGE_KEYBOARD,
+        )
+        return
+
+    context.user_data["multi_classified"] = classified
+    context.user_data["bot_state"] = BotState.MULTI_IMAGE_REVIEW
+
+    # ── Show results ─────────────────────────────────────────────────────────
+    result_text = _format_multi_results(classified)
+
+    valid_saveable = sum(
+        1 for m in classified
+        if m["valid"] and not m["duplicate"] and not m["within_batch_dup"]
+    )
+
+    # Edit the progress message to show summary
+    try:
+        await query.edit_message_text(
+            result_text,
+            parse_mode="HTML",
+        )
+    except Exception:
+        # If edit fails (e.g. message too old), send a new one
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=result_text,
+            parse_mode="HTML",
+        )
+
+    # Confirmation message with inline buttons (keyboard stays hidden)
+    if valid_saveable > 0:
+        confirm_text = (
+            f"Bạn có muốn lưu <b>{valid_saveable}</b> thiết bị hợp lệ vào Google Sheets không?"
+        )
+    else:
+        confirm_text = (
+            "⚠️ Không có thiết bị hợp lệ nào để lưu.\n"
+            "Tất cả đều không hợp lệ hoặc đã tồn tại."
+        )
+
+    save_kb = [
+        [InlineKeyboardButton("💾 Lưu dữ liệu máy", callback_data=CB_MULTI_SAVE)],
+        [InlineKeyboardButton("❌ Hủy",              callback_data=CB_MULTI_CANCEL)],
+    ]
+    await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text=confirm_text,
+        reply_markup=InlineKeyboardMarkup(save_kb),
+        parse_mode="HTML",
+    )
+
+
+# ─────────────────────────────────────────────
+# MULTI-IMAGE: "💾 Lưu dữ liệu máy" — save valid machines
+# ─────────────────────────────────────────────
+async def handle_multi_save_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if context.user_data.get("bot_state") != BotState.MULTI_IMAGE_REVIEW:
+        await query.edit_message_text("⚠️ Trạng thái không hợp lệ. Vui lòng bắt đầu lại.")
+        return
+
+    context.user_data["bot_state"] = BotState.MULTI_IMAGE_SAVING
+    classified: list = context.user_data.get("multi_classified", [])
+
+    valid_machines = [
+        m for m in classified
+        if m["valid"] and not m["duplicate"] and not m["within_batch_dup"]
+    ]
+
+    if not valid_machines:
+        await query.edit_message_text(
+            "⚠️ Không có thiết bị hợp lệ nào để lưu.\n"
+            "Quay lại thu thập ảnh:",
+        )
+        context.user_data["bot_state"] = BotState.MULTI_IMAGE_COLLECTING
+        context.user_data["multi_images"] = []
+        context.user_data.pop("multi_classified", None)
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="Sẵn sàng nhận ảnh mới:",
+            reply_markup=MULTI_IMAGE_KEYBOARD,
+        )
+        return
+
+    await query.edit_message_text(
+        f"💾 Đang lưu <b>{len(valid_machines)}</b> thiết bị vào Google Sheets...",
+        parse_mode="HTML",
+    )
+    logging.info(f"[MULTI] Saving {len(valid_machines)} valid machines")
+
+    try:
+        ocr_results = [
+            OCRResult(markdown=m["markdown"], key_value=m["kv"])
+            for m in valid_machines
+        ]
+        await sheet_service.append_results(ocr_results, "TELEGRAM_MULTI", force=False)
+        logging.info(f"[MULTI] Saved {len(valid_machines)} machines successfully")
+
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=(
+                f"✅ <b>Đã lưu thành công {len(valid_machines)} thiết bị vào Google Sheets!</b>\n\n"
+                "Bạn có thể tiếp tục gửi ảnh để đọc lô tiếp theo."
+            ),
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        logging.exception("[MULTI] Failed to save to Google Sheets")
+        await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="❌ Không thể lưu dữ liệu.\n\nVui lòng thử lại."
+        )
+
+    # ── Restore multi-image state for next batch ──────────────────────────
+    context.user_data["bot_state"]   = BotState.MULTI_IMAGE_COLLECTING
+    context.user_data["multi_images"] = []
+    context.user_data.pop("multi_classified", None)
+    context.user_data.pop("multi_selected_engine", None)
+
+    await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text="📚 Sẵn sàng nhận lô ảnh mới. Gửi ảnh hoặc nhấn <b>↩️ Trở về</b> để về menu chính.",
+        reply_markup=MULTI_IMAGE_KEYBOARD,
+        parse_mode="HTML",
+    )
+
+
+# ─────────────────────────────────────────────
+# MULTI-IMAGE: "❌ Hủy" — cancel review, return to collecting
+# ─────────────────────────────────────────────
+async def handle_multi_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    await query.edit_message_text(
+        "❌ Đã hủy. Không có dữ liệu nào được lưu."
+    )
+
+    # Clear batch but stay in multi-image mode
+    context.user_data["bot_state"]   = BotState.MULTI_IMAGE_COLLECTING
+    context.user_data["multi_images"] = []
+    context.user_data.pop("multi_classified", None)
+    context.user_data.pop("multi_selected_engine", None)
+
+    logging.info(f"[MULTI] User {query.from_user.id} cancelled review; returning to collecting")
+
+    await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text="📚 Sẵn sàng nhận lô ảnh mới. Gửi ảnh hoặc nhấn <b>↩️ Trở về</b> để về menu chính.",
+        reply_markup=MULTI_IMAGE_KEYBOARD,
+        parse_mode="HTML",
+    )
+
+
 # ─────────────────────────────────────────────
 # Fallback: unexpected text outside EDIT_FIELD state
 # ─────────────────────────────────────────────
@@ -1744,9 +2358,43 @@ conv_handler = ConversationHandler(
 if __name__ == "__main__":
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    # ── Priority group -1: intercept multi-image photos BEFORE conv_handler ──
+    app.add_handler(
+        MessageHandler(filters.PHOTO, handle_multi_image_photo),
+        group=-1,
+    )
+
+    # ── Priority group 0 (default) ────────────────────────────────────────────
     app.add_handler(CommandHandler("start",  start))
     app.add_handler(CommandHandler("help",   help_cmd))
     app.add_handler(CommandHandler("cancel", cancel))
+
+    # ── Main menu ReplyKeyboard text buttons ──────────────────────────────────
+    app.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r'^📚 Đọc nhiều hình$'),
+        handle_enter_multi_image,
+    ))
+    app.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r'^📷 Đọc 1 hình$'),
+        handle_main_menu_single,
+    ))
+
+    # ── Multi-image flow text buttons ─────────────────────────────────────────
+    app.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r'^↩️ Trở về$'),
+        handle_multi_go_back,
+    ))
+    app.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r'^▶️ Tiến hành đọc$'),
+        handle_multi_proceed,
+    ))
+
+    # ── Multi-image inline callbacks ──────────────────────────────────────────
+    app.add_handler(CallbackQueryHandler(handle_multi_engine_choice,  pattern="^multi_engine:"))
+    app.add_handler(CallbackQueryHandler(handle_multi_save_confirm,    pattern=f"^{CB_MULTI_SAVE}$"))
+    app.add_handler(CallbackQueryHandler(handle_multi_cancel,          pattern=f"^{CB_MULTI_CANCEL}$"))
+
+    # ── Existing handlers (unchanged) ─────────────────────────────────────────
     app.add_handler(config_conv_handler)
     app.add_handler(MessageHandler(filters.Regex(r'^/ws\b'), ws_redirect_cmd))
     app.add_handler(MessageHandler(filters.Regex(r'^/(l)\b'), set_location_cmd))
