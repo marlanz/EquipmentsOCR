@@ -2015,15 +2015,20 @@ async def handle_multi_engine_choice(update: Update, context: ContextTypes.DEFAU
 
     logging.info(f"[MULTI] Starting concurrent OCR for {len(images)} images | engine={engine_name}")
 
-    # ── Concurrent OCR ───────────────────────────────────────────────────────
+    # ── Concurrent OCR (timed) ───────────────────────────────────────────────
+    import time as _time
     tasks = [
         _ocr_one_image(context.bot, file_id, endpoint, i + 1)
         for i, file_id in enumerate(images)
     ]
+    _ocr_start = _time.perf_counter()
     try:
         raw_results = await asyncio.gather(*tasks)
-    except Exception as e:
-        logging.exception("[MULTI] Unexpected error during asyncio.gather")
+        _ocr_elapsed = round(_time.perf_counter() - _ocr_start, 1)
+        logging.info(f"[MULTI] OCR finished in {_ocr_elapsed}s for {len(images)} images")
+    except Exception:
+        _ocr_elapsed = round(_time.perf_counter() - _ocr_start, 1)
+        logging.exception(f"[MULTI] Unexpected error during asyncio.gather after {_ocr_elapsed}s")
         await context.bot.send_message(
             chat_id=query.message.chat_id,
             text="❌ Không thể đọc hình ảnh.\n\nVui lòng thử lại."
@@ -2106,7 +2111,7 @@ async def handle_multi_engine_choice(update: Update, context: ContextTypes.DEFAU
     context.user_data["bot_state"] = BotState.MULTI_IMAGE_REVIEW
 
     # ── Show results ─────────────────────────────────────────────────────────
-    result_text = _format_multi_results(classified)
+    result_text = _format_multi_results(classified, _ocr_elapsed)
 
     valid_saveable = sum(
         1 for m in classified
